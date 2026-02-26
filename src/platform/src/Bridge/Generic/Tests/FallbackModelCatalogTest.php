@@ -59,7 +59,7 @@ final class FallbackModelCatalogTest extends TestCase
         }
     }
 
-    public function testModelWithOptions(): void
+    public function testCompletionsModelWithOptions(): void
     {
         $catalog = new FallbackModelCatalog();
         $model = $catalog->getModel('gpt-4o?temperature=0.7&max_tokens=1000');
@@ -68,6 +68,16 @@ final class FallbackModelCatalogTest extends TestCase
         $this->assertSame('gpt-4o', $model->getName());
         $this->assertSame(0.7, $model->getOptions()['temperature']);
         $this->assertSame(1000, $model->getOptions()['max_tokens']);
+    }
+
+    public function testEmbeddingsModelWithOptions(): void
+    {
+        $catalog = new FallbackModelCatalog();
+        $model = $catalog->getModel('text-embedding-3-small?dimensions=256');
+
+        $this->assertInstanceOf(EmbeddingsModel::class, $model);
+        $this->assertSame('text-embedding-3-small', $model->getName());
+        $this->assertSame(256, $model->getOptions()['dimensions']);
     }
 
     public function testGetModelsReturnsEmptyArray(): void

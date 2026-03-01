@@ -5,6 +5,7 @@ CHANGELOG
 ---
 
  * Add well-known base URLs for providers with dedicated npm packages
+ * Skip specialized bridge check in `ModelsDevPlatformFactory` when a custom `$baseUrl` is provided
 
 0.4
 ---

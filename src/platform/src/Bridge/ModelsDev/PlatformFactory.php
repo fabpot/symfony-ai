@@ -65,8 +65,10 @@ final class PlatformFactory
         $providerData = $data[$provider];
         $npmPackage = $providerData['npm'] ?? null;
 
-        // Check if this provider requires a specialized bridge (e.g., Anthropic, Google)
-        if (null !== $npmPackage && BridgeResolver::requiresSpecializedBridge($npmPackage)) {
+        // Check if this provider requires a specialized bridge (e.g., Anthropic, Google).
+        // When a custom baseUrl is given, skip this check: the user is pointing at an
+        // OpenAI-compatible proxy, so the generic bridge is always the right choice.
+        if (null === $baseUrl && null !== $npmPackage && BridgeResolver::requiresSpecializedBridge($npmPackage)) {
             $package = BridgeResolver::getComposerPackage($npmPackage);
             $factoryClass = BridgeResolver::getBridgeFactory($npmPackage);
 

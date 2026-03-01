@@ -17,6 +17,7 @@ use Symfony\AI\Platform\Bridge\Generic\EmbeddingsModel;
 use Symfony\AI\Platform\Bridge\Generic\PlatformFactory as GenericPlatformFactory;
 use Symfony\AI\Platform\Contract;
 use Symfony\AI\Platform\Exception\InvalidArgumentException;
+use Symfony\AI\Platform\ModelCatalog\FallbackModelCatalog;
 use Symfony\AI\Platform\Platform;
 use Symfony\Component\HttpClient\EventSourceHttpClient;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
@@ -77,12 +78,12 @@ final class PlatformFactory
                 throw new InvalidArgumentException(\sprintf('Provider "%s" requires "%s" which has a different factory signature; use "%s::create()" directly.', $provider, $package, $factoryClass));
             }
 
-            $modelCatalog = new ModelCatalog(
+            $modelCatalog = new FallbackModelCatalog(new ModelCatalog(
                 $provider,
                 $dataPath,
                 completionsModelClass: BridgeResolver::getCompletionsModelClass($npmPackage),
                 embeddingsModelClass: BridgeResolver::getEmbeddingsModelClass($npmPackage),
-            );
+            ));
 
             return $factoryClass::create(
                 apiKey: $apiKey,
@@ -111,8 +112,8 @@ final class PlatformFactory
         // Automatically detect what the provider supports based on its model catalog
         $supportsCompletions = false;
         $supportsEmbeddings = false;
-        $modelCatalog = new ModelCatalog($provider, $dataPath);
-        foreach ($modelCatalog->getModels() as $modelData) {
+        $innerCatalog = new ModelCatalog($provider, $dataPath);
+        foreach ($innerCatalog->getModels() as $modelData) {
             if (CompletionsModel::class === $modelData['class'] || is_subclass_of($modelData['class'], CompletionsModel::class)) {
                 $supportsCompletions = true;
             }
@@ -129,7 +130,7 @@ final class PlatformFactory
         return GenericPlatformFactory::create(
             baseUrl: $baseUrl,
             apiKey: $apiKey,
-            modelCatalog: $modelCatalog,
+            modelCatalog: new FallbackModelCatalog($innerCatalog),
             contract: $contract,
             httpClient: $httpClient,
             eventDispatcher: $eventDispatcher,

@@ -175,6 +175,16 @@ class ModelClientTest extends TestCase
         $this->modelClient->request($this->model, ['message' => 'test'], $options);
     }
 
+    public function testStringPayloadThrowsException()
+    {
+        $this->modelClient = new ModelClient(new MockHttpClient(), 'test-api-key');
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Payload must be an array, but a string was given');
+
+        $this->modelClient->request($this->model, 'string payload');
+    }
+
     /**
      * @param list<string> $headers
      *

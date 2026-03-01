@@ -1,6 +1,11 @@
 CHANGELOG
 =========
 
+0.6
+---
+
+ * Add optional primary catalog delegation and embed-name heuristic to `FallbackModelCatalog`
+
 0.4
 ---
 

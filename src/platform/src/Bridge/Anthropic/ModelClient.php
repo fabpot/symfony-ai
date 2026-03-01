@@ -11,6 +11,7 @@
 
 namespace Symfony\AI\Platform\Bridge\Anthropic;
 
+use Symfony\AI\Platform\Exception\InvalidArgumentException;
 use Symfony\AI\Platform\Model;
 use Symfony\AI\Platform\ModelClientInterface;
 use Symfony\AI\Platform\Result\RawHttpResult;
@@ -24,10 +25,21 @@ final class ModelClient implements ModelClientInterface
 {
     private readonly EventSourceHttpClient $httpClient;
 
+    /**
+     * @param 'none'|'short'|'long' $cacheRetention Controls Anthropic prompt-caching retention:
+     *                                              - 'short': 5-minute cache window (default Anthropic ephemeral TTL)
+     *                                              - 'long':  1-hour cache window; only available on api.anthropic.com
+     *                                              - 'none':  prompt caching disabled
+     */
     public function __construct(
         HttpClientInterface $httpClient,
         #[\SensitiveParameter] private readonly string $apiKey,
+        private readonly string $cacheRetention = 'short',
     ) {
+        if (!\in_array($cacheRetention, ['none', 'short', 'long'], true)) {
+            throw new InvalidArgumentException(\sprintf('Invalid cache retention "%s". Supported values are "none", "short" and "long".', $cacheRetention));
+        }
+
         $this->httpClient = $httpClient instanceof EventSourceHttpClient ? $httpClient : new EventSourceHttpClient($httpClient);
     }
 
@@ -43,9 +55,9 @@ final class ModelClient implements ModelClientInterface
             'anthropic-version' => '2023-06-01',
         ];
 
-        // Consumed by PromptCacheNormalizer during payload creation; strip
-        // before the request so it is never forwarded to the Anthropic API.
-        unset($options['cacheRetention']);
+        if (\is_array($payload)) {
+            $payload = $this->injectCacheControl($payload);
+        }
 
         if (isset($options['tools'])) {
             $options['tool_choice'] = ['type' => 'auto'];
@@ -74,5 +86,60 @@ final class ModelClient implements ModelClientInterface
             'headers' => $headers,
             'json' => array_merge($options, $payload),
         ]));
+    }
+
+    /**
+     * Injects prompt-caching markers into the normalised message payload.
+     *
+     * Anthropic prompt caching requires a {"cache_control": {"type": "ephemeral"}}
+     * annotation on the last block of the last user message.
+     *
+     * @param array<string, mixed> $payload
+     *
+     * @return array<string, mixed>
+     */
+    private function injectCacheControl(array $payload): array
+    {
+        if ('none' === $this->cacheRetention) {
+            return $payload;
+        }
+
+        $messages = $payload['messages'] ?? [];
+
+        if ([] === $messages) {
+            return $payload;
+        }
+
+        $cacheControl = 'long' === $this->cacheRetention
+            ? ['type' => 'ephemeral', 'ttl' => '1h']
+            : ['type' => 'ephemeral'];
+
+        for ($i = \count($messages) - 1; $i >= 0; --$i) {
+            if ('user' !== ($messages[$i]['role'] ?? '')) {
+                continue;
+            }
+
+            $content = $messages[$i]['content'] ?? null;
+
+            if (\is_string($content)) {
+                $messages[$i]['content'] = [
+                    ['type' => 'text', 'text' => $content, 'cache_control' => $cacheControl],
+                ];
+                break;
+            }
+
+            if (\is_array($content) && [] !== $content) {
+                $lastIdx = \count($content) - 1;
+                if (\is_array($content[$lastIdx])) {
+                    $content[$lastIdx]['cache_control'] = $cacheControl;
+                    $messages[$i]['content'] = $content;
+                }
+                break;
+            }
+        }
+
+        $payload['messages'] = $messages;
+
+        return $payload;
     }
 }

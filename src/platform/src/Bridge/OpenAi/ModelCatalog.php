@@ -528,6 +528,16 @@ final class ModelCatalog extends AbstractModelCatalog
                     Capability::OUTPUT_IMAGE,
                 ],
             ],
+            'gpt-image-2' => [
+                'class' => Gpt::class,
+                'capabilities' => [
+                    Capability::INPUT_MESSAGES,
+                    Capability::OUTPUT_TEXT,
+                    Capability::OUTPUT_STREAMING,
+                    Capability::INPUT_IMAGE,
+                    Capability::OUTPUT_IMAGE,
+                ],
+            ],
             'o1' => [
                 'class' => Gpt::class,
                 'capabilities' => [

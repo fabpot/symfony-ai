@@ -27,6 +27,34 @@ final class ModelCatalog extends AbstractModelCatalog
         // STATIC LIST START
         // This list is generated from external metadata. Run dev/update-model-catalogs.php to refresh it.
         $defaultModels = [
+            'deep-research-max-preview-04-2026' => [
+                'class' => Gemini::class,
+                'capabilities' => [
+                    Capability::INPUT_MESSAGES,
+                    Capability::OUTPUT_TEXT,
+                    Capability::OUTPUT_STREAMING,
+                    Capability::TOOL_CALLING,
+                    Capability::THINKING,
+                    Capability::INPUT_IMAGE,
+                    Capability::INPUT_PDF,
+                    Capability::INPUT_AUDIO,
+                    Capability::OUTPUT_IMAGE,
+                ],
+            ],
+            'deep-research-preview-04-2026' => [
+                'class' => Gemini::class,
+                'capabilities' => [
+                    Capability::INPUT_MESSAGES,
+                    Capability::OUTPUT_TEXT,
+                    Capability::OUTPUT_STREAMING,
+                    Capability::TOOL_CALLING,
+                    Capability::THINKING,
+                    Capability::INPUT_IMAGE,
+                    Capability::INPUT_PDF,
+                    Capability::INPUT_AUDIO,
+                    Capability::OUTPUT_IMAGE,
+                ],
+            ],
             'gemini-2.0-flash' => [
                 'class' => Gemini::class,
                 'capabilities' => [
@@ -52,6 +80,17 @@ final class ModelCatalog extends AbstractModelCatalog
                     Capability::INPUT_IMAGE,
                     Capability::INPUT_PDF,
                     Capability::INPUT_AUDIO,
+                ],
+            ],
+            'gemini-2.5-computer-use-preview-10-2025' => [
+                'class' => Gemini::class,
+                'capabilities' => [
+                    Capability::INPUT_MESSAGES,
+                    Capability::OUTPUT_TEXT,
+                    Capability::OUTPUT_STREAMING,
+                    Capability::TOOL_CALLING,
+                    Capability::THINKING,
+                    Capability::INPUT_IMAGE,
                 ],
             ],
             'gemini-2.5-flash' => [
@@ -162,6 +201,17 @@ final class ModelCatalog extends AbstractModelCatalog
                     Capability::TOOL_CALLING,
                 ],
             ],
+            'gemini-3-pro-image' => [
+                'class' => Gemini::class,
+                'capabilities' => [
+                    Capability::INPUT_MESSAGES,
+                    Capability::OUTPUT_TEXT,
+                    Capability::OUTPUT_STREAMING,
+                    Capability::THINKING,
+                    Capability::INPUT_IMAGE,
+                    Capability::OUTPUT_IMAGE,
+                ],
+            ],
             'gemini-3-pro-image-preview' => [
                 'class' => Gemini::class,
                 'capabilities' => [
@@ -186,6 +236,18 @@ final class ModelCatalog extends AbstractModelCatalog
                     Capability::OUTPUT_STRUCTURED,
                     Capability::TOOL_CALLING,
                     Capability::THINKING,
+                ],
+            ],
+            'gemini-3.1-flash-image' => [
+                'class' => Gemini::class,
+                'capabilities' => [
+                    Capability::INPUT_MESSAGES,
+                    Capability::OUTPUT_TEXT,
+                    Capability::OUTPUT_STREAMING,
+                    Capability::THINKING,
+                    Capability::INPUT_IMAGE,
+                    Capability::INPUT_PDF,
+                    Capability::OUTPUT_IMAGE,
                 ],
             ],
             'gemini-3.1-flash-image-preview' => [
@@ -214,6 +276,18 @@ final class ModelCatalog extends AbstractModelCatalog
                     Capability::INPUT_AUDIO,
                 ],
             ],
+            'gemini-3.1-flash-lite-image' => [
+                'class' => Gemini::class,
+                'capabilities' => [
+                    Capability::INPUT_MESSAGES,
+                    Capability::OUTPUT_TEXT,
+                    Capability::OUTPUT_STREAMING,
+                    Capability::TOOL_CALLING,
+                    Capability::THINKING,
+                    Capability::INPUT_IMAGE,
+                    Capability::OUTPUT_IMAGE,
+                ],
+            ],
             'gemini-3.1-flash-lite-preview' => [
                 'class' => Gemini::class,
                 'capabilities' => [
@@ -226,6 +300,29 @@ final class ModelCatalog extends AbstractModelCatalog
                     Capability::INPUT_IMAGE,
                     Capability::INPUT_PDF,
                     Capability::INPUT_AUDIO,
+                ],
+            ],
+            'gemini-3.1-flash-live-preview' => [
+                'class' => Gemini::class,
+                'capabilities' => [
+                    Capability::INPUT_MESSAGES,
+                    Capability::OUTPUT_TEXT,
+                    Capability::OUTPUT_STREAMING,
+                    Capability::TOOL_CALLING,
+                    Capability::THINKING,
+                    Capability::INPUT_IMAGE,
+                    Capability::INPUT_AUDIO,
+                    Capability::OUTPUT_AUDIO,
+                ],
+            ],
+            'gemini-3.1-flash-tts-preview' => [
+                'class' => Gemini::class,
+                'capabilities' => [
+                    Capability::INPUT_MESSAGES,
+                    Capability::OUTPUT_TEXT,
+                    Capability::OUTPUT_STREAMING,
+                    Capability::THINKING,
+                    Capability::OUTPUT_AUDIO,
                 ],
             ],
             'gemini-3.1-pro-preview' => [
@@ -271,7 +368,52 @@ final class ModelCatalog extends AbstractModelCatalog
                     Capability::INPUT_AUDIO,
                 ],
             ],
+            'gemini-3.5-flash-lite' => [
+                'class' => Gemini::class,
+                'capabilities' => [
+                    Capability::INPUT_MESSAGES,
+                    Capability::OUTPUT_TEXT,
+                    Capability::OUTPUT_STREAMING,
+                    Capability::TOOL_CALLING,
+                    Capability::OUTPUT_STRUCTURED,
+                    Capability::THINKING,
+                    Capability::INPUT_IMAGE,
+                    Capability::INPUT_PDF,
+                    Capability::INPUT_AUDIO,
+                ],
+            ],
+            'gemini-3.5-live-translate-preview' => [
+                'class' => Gemini::class,
+                'capabilities' => [
+                    Capability::INPUT_MESSAGES,
+                    Capability::OUTPUT_TEXT,
+                    Capability::OUTPUT_STREAMING,
+                    Capability::INPUT_AUDIO,
+                    Capability::OUTPUT_AUDIO,
+                ],
+            ],
+            'gemini-3.6-flash' => [
+                'class' => Gemini::class,
+                'capabilities' => [
+                    Capability::INPUT_MESSAGES,
+                    Capability::OUTPUT_TEXT,
+                    Capability::OUTPUT_STREAMING,
+                    Capability::TOOL_CALLING,
+                    Capability::OUTPUT_STRUCTURED,
+                    Capability::THINKING,
+                    Capability::INPUT_IMAGE,
+                    Capability::INPUT_PDF,
+                    Capability::INPUT_AUDIO,
+                ],
+            ],
             'gemini-embedding-001' => [
+                'class' => Embeddings::class,
+                'capabilities' => [
+                    Capability::INPUT_TEXT,
+                    Capability::EMBEDDINGS,
+                ],
+            ],
+            'gemini-embedding-2' => [
                 'class' => Embeddings::class,
                 'capabilities' => [
                     Capability::INPUT_TEXT,
@@ -314,6 +456,19 @@ final class ModelCatalog extends AbstractModelCatalog
                     Capability::OUTPUT_STREAMING,
                     Capability::THINKING,
                     Capability::INPUT_IMAGE,
+                ],
+            ],
+            'gemini-robotics-er-1.6-preview' => [
+                'class' => Gemini::class,
+                'capabilities' => [
+                    Capability::INPUT_MESSAGES,
+                    Capability::OUTPUT_TEXT,
+                    Capability::OUTPUT_STREAMING,
+                    Capability::TOOL_CALLING,
+                    Capability::OUTPUT_STRUCTURED,
+                    Capability::THINKING,
+                    Capability::INPUT_IMAGE,
+                    Capability::INPUT_AUDIO,
                 ],
             ],
             'gemma-4-26b-a4b-it' => [
@@ -364,6 +519,53 @@ final class ModelCatalog extends AbstractModelCatalog
                     Capability::THINKING,
                     Capability::INPUT_IMAGE,
                     Capability::INPUT_AUDIO,
+                ],
+            ],
+            'lyria-3-clip-preview' => [
+                'class' => Gemini::class,
+                'capabilities' => [
+                    Capability::INPUT_MESSAGES,
+                    Capability::OUTPUT_TEXT,
+                    Capability::OUTPUT_STREAMING,
+                    Capability::INPUT_IMAGE,
+                    Capability::OUTPUT_AUDIO,
+                ],
+            ],
+            'lyria-3-pro-preview' => [
+                'class' => Gemini::class,
+                'capabilities' => [
+                    Capability::INPUT_MESSAGES,
+                    Capability::OUTPUT_TEXT,
+                    Capability::OUTPUT_STREAMING,
+                    Capability::INPUT_IMAGE,
+                    Capability::OUTPUT_AUDIO,
+                ],
+            ],
+            'veo-3.1-fast-generate-preview' => [
+                'class' => Gemini::class,
+                'capabilities' => [
+                    Capability::INPUT_MESSAGES,
+                    Capability::OUTPUT_TEXT,
+                    Capability::OUTPUT_STREAMING,
+                    Capability::INPUT_IMAGE,
+                ],
+            ],
+            'veo-3.1-generate-preview' => [
+                'class' => Gemini::class,
+                'capabilities' => [
+                    Capability::INPUT_MESSAGES,
+                    Capability::OUTPUT_TEXT,
+                    Capability::OUTPUT_STREAMING,
+                    Capability::INPUT_IMAGE,
+                ],
+            ],
+            'veo-3.1-lite-generate-preview' => [
+                'class' => Gemini::class,
+                'capabilities' => [
+                    Capability::INPUT_MESSAGES,
+                    Capability::OUTPUT_TEXT,
+                    Capability::OUTPUT_STREAMING,
+                    Capability::INPUT_IMAGE,
                 ],
             ],
         ];

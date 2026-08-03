@@ -387,6 +387,15 @@ final class ModelCatalog extends AbstractModelCatalog
                     Capability::TOOL_CALLING,
                 ],
             ],
+            'voxtral-mini-tts-latest' => [
+                'class' => Mistral::class,
+                'capabilities' => [
+                    Capability::INPUT_MESSAGES,
+                    Capability::OUTPUT_TEXT,
+                    Capability::OUTPUT_STREAMING,
+                    Capability::OUTPUT_AUDIO,
+                ],
+            ],
             'voxtral-small-latest' => [
                 'class' => Mistral::class,
                 'capabilities' => [

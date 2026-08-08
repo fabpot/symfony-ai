@@ -1492,12 +1492,16 @@ final class ResultConverterTest extends TestCase
 
         $this->assertCount(6, $chunks);
         $this->assertInstanceOf(ThinkingStart::class, $chunks[0]);
+        $this->assertTrue($chunks[0]->isSummary());
         $this->assertInstanceOf(ThinkingDelta::class, $chunks[1]);
         $this->assertSame('Let me think', $chunks[1]->getThinking());
+        $this->assertTrue($chunks[1]->isSummary());
         $this->assertInstanceOf(ThinkingDelta::class, $chunks[2]);
         $this->assertSame(' about this...', $chunks[2]->getThinking());
+        $this->assertTrue($chunks[2]->isSummary());
         $this->assertInstanceOf(ThinkingComplete::class, $chunks[3]);
         $this->assertSame('Let me think about this...', $chunks[3]->getThinking());
+        $this->assertTrue($chunks[3]->isSummary());
         $this->assertInstanceOf(TextDelta::class, $chunks[4]);
         $this->assertSame('The answer is 42.', $chunks[4]->getText());
     }

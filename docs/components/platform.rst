@@ -599,7 +599,8 @@ If you need access to all delta types (e.g. tool calls, thinking, metadata), use
 The following delta types are available:
 
 * :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\TextDelta` -- a chunk of generated text
-* :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ThinkingDelta` -- a chunk of model reasoning
+* :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ThinkingStart` -- signals the start of a full thinking or summary block
+* :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ThinkingDelta` -- a chunk of full model reasoning or its summary
 * :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ThinkingComplete` -- signals thinking is complete, includes accumulated thinking text and optional signature
 * :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ThinkingSignature` -- a cryptographic signature for a thinking block
 * :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ToolCallStart` -- signals the start of a tool call
@@ -763,8 +764,8 @@ deltas::
 
     foreach ($result->asStream() as $delta) {
         if ($delta instanceof ThinkingDelta) {
-            // Incremental reasoning chunk (not shown to the user in most UIs)
-            echo '[thinking] ' . $delta->getThinking();
+            $label = $delta->isSummary() ? 'thinking summary' : 'thinking';
+            echo '[' . $label . '] ' . $delta->getThinking();
 
             continue;
         }
@@ -787,9 +788,17 @@ deltas::
         }
     }
 
-The ``ThinkingComplete`` delta has two methods:
+Providers can expose full model thinking or summaries of reasoning that remains
+hidden. The ``ThinkingStart``, ``ThinkingDelta`` and ``ThinkingComplete`` deltas
+return ``true`` from ``isSummary()`` for the latter.
 
-* ``getThinking()`` (string): the model's accumulated reasoning text
+.. versionadded:: 0.13
+
+    The ``isSummary()`` method was introduced in Symfony AI 0.13.
+
+The ``ThinkingComplete`` delta also has these methods:
+
+* ``getThinking()`` (string): the model's accumulated reasoning text or summary
 * ``getSignature()`` (?string): a cryptographic signature (Anthropic only), required
   when echoing thinking blocks back in multi-turn conversations
 

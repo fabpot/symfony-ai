@@ -22,6 +22,7 @@ final class ThinkingCompleteTest extends TestCase
 
         $this->assertSame('Let me think about this...', $content->getThinking());
         $this->assertSame('sig_abc123', $content->getSignature());
+        $this->assertFalse($content->isSummary());
     }
 
     public function testThinkingCompleteWithoutSignature()
@@ -30,5 +31,14 @@ final class ThinkingCompleteTest extends TestCase
 
         $this->assertSame('reasoning here', $content->getThinking());
         $this->assertNull($content->getSignature());
+        $this->assertFalse($content->isSummary());
+    }
+
+    public function testThinkingSummary()
+    {
+        $content = new ThinkingComplete('Summarized reasoning', summary: true);
+
+        $this->assertSame('Summarized reasoning', $content->getThinking());
+        $this->assertTrue($content->isSummary());
     }
 }

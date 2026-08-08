@@ -499,14 +499,14 @@ class ResultConverter implements ResultConverterInterface
             if ('response.reasoning_summary_text.delta' === $type && isset($event['delta'])) {
                 if (null === $currentThinking) {
                     $currentThinking = '';
-                    yield new ThinkingStart();
+                    yield new ThinkingStart(summary: true);
                 }
                 $currentThinking .= $event['delta'];
-                yield new ThinkingDelta($event['delta']);
+                yield new ThinkingDelta($event['delta'], summary: true);
             }
 
             if ('response.reasoning_summary_text.done' === $type) {
-                yield new ThinkingComplete($currentThinking ?? '');
+                yield new ThinkingComplete($currentThinking ?? '', summary: true);
                 $currentThinking = null;
             }
 

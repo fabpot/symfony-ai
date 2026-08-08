@@ -18,11 +18,17 @@ final class ThinkingDelta implements DeltaInterface
 {
     public function __construct(
         private readonly string $thinking,
+        private readonly bool $summary = false,
     ) {
     }
 
     public function getThinking(): string
     {
         return $this->thinking;
+    }
+
+    public function isSummary(): bool
+    {
+        return $this->summary;
     }
 }

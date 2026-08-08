@@ -16,4 +16,13 @@ namespace Symfony\AI\Platform\Result\Stream\Delta;
  */
 final class ThinkingStart implements DeltaInterface
 {
+    public function __construct(
+        private readonly bool $summary = false,
+    ) {
+    }
+
+    public function isSummary(): bool
+    {
+        return $this->summary;
+    }
 }

@@ -11,6 +11,8 @@
 
 namespace Symfony\AI\Platform\Result\Stream\Delta;
 
+use Symfony\AI\Platform\Result\ThinkingContentType;
+
 /**
  * Signals that a thinking block is complete with accumulated content.
  *
@@ -21,7 +23,7 @@ final class ThinkingComplete implements DeltaInterface
     public function __construct(
         private readonly string $thinking,
         private readonly ?string $signature = null,
-        private readonly bool $summary = false,
+        private readonly ThinkingContentType $contentType = ThinkingContentType::FULL,
     ) {
     }
 
@@ -35,8 +37,8 @@ final class ThinkingComplete implements DeltaInterface
         return $this->signature;
     }
 
-    public function isSummary(): bool
+    public function getContentType(): ThinkingContentType
     {
-        return $this->summary;
+        return $this->contentType;
     }
 }

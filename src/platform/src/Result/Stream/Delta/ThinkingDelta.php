@@ -11,6 +11,8 @@
 
 namespace Symfony\AI\Platform\Result\Stream\Delta;
 
+use Symfony\AI\Platform\Result\ThinkingContentType;
+
 /**
  * @author Fabien Potencier <fabien@symfony.com>
  */
@@ -18,7 +20,7 @@ final class ThinkingDelta implements DeltaInterface
 {
     public function __construct(
         private readonly string $thinking,
-        private readonly bool $summary = false,
+        private readonly ThinkingContentType $contentType = ThinkingContentType::FULL,
     ) {
     }
 
@@ -27,8 +29,8 @@ final class ThinkingDelta implements DeltaInterface
         return $this->thinking;
     }
 
-    public function isSummary(): bool
+    public function getContentType(): ThinkingContentType
     {
-        return $this->summary;
+        return $this->contentType;
     }
 }

@@ -19,6 +19,7 @@ final class ThinkingResult extends BaseResult
     public function __construct(
         private readonly ?string $content = null,
         private readonly ?string $signature = null,
+        private readonly ThinkingContentType $contentType = ThinkingContentType::FULL,
     ) {
     }
 
@@ -30,5 +31,10 @@ final class ThinkingResult extends BaseResult
     public function getSignature(): ?string
     {
         return $this->signature;
+    }
+
+    public function getContentType(): ThinkingContentType
+    {
+        return $this->contentType;
     }
 }

@@ -26,6 +26,7 @@ use Symfony\AI\Platform\Message\MessageInterface;
 use Symfony\AI\Platform\Message\SystemMessage;
 use Symfony\AI\Platform\Message\ToolCallMessage;
 use Symfony\AI\Platform\Message\UserMessage;
+use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ToolCall;
 use Symfony\Component\Serializer\Exception\InvalidArgumentException;
 use Symfony\Component\Serializer\Normalizer\DenormalizerInterface;
@@ -149,7 +150,12 @@ final class MessageNormalizer implements NormalizerInterface, DenormalizerInterf
             if ($part instanceof Text) {
                 $parts[] = ['type' => Text::class, 'text' => $part->getText()];
             } elseif ($part instanceof Thinking) {
-                $parts[] = ['type' => Thinking::class, 'content' => $part->getContent(), 'signature' => $part->getSignature()];
+                $parts[] = [
+                    'type' => Thinking::class,
+                    'content' => $part->getContent(),
+                    'signature' => $part->getSignature(),
+                    'contentType' => $part->getContentType()->value,
+                ];
             } elseif ($part instanceof ToolCall) {
                 $parts[] = ['type' => ToolCall::class, 'toolCall' => $this->normalizer->normalize($part, $format, $context)];
             }
@@ -217,7 +223,11 @@ final class MessageNormalizer implements NormalizerInterface, DenormalizerInterf
             foreach ($data['parts'] as $part) {
                 $parts[] = match ($part['type']) {
                     Text::class => new Text($part['text']),
-                    Thinking::class => new Thinking($part['content'] ?? '', $part['signature'] ?? null),
+                    Thinking::class => new Thinking(
+                        $part['content'] ?? '',
+                        $part['signature'] ?? null,
+                        ThinkingContentType::from($part['contentType'] ?? ThinkingContentType::FULL->value),
+                    ),
                     ToolCall::class => new ToolCall(
                         $part['toolCall']['id'],
                         $part['toolCall']['function']['name'],

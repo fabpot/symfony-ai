@@ -21,6 +21,7 @@ use Symfony\AI\Platform\Result\MultiPartResult;
 use Symfony\AI\Platform\Result\RawResultInterface;
 use Symfony\AI\Platform\Result\ResultInterface;
 use Symfony\AI\Platform\Result\TextResult;
+use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCall;
 use Symfony\AI\Platform\Result\ToolCallResult;
@@ -56,7 +57,14 @@ final class ClaudeResultConverter implements ResultConverterInterface
             } elseif ('text' === $type) {
                 $results[] = new TextResult($content['text']);
             } elseif ('thinking' === $type) {
-                $results[] = new ThinkingResult($content['thinking'], $content['signature'] ?? null);
+                $thinking = $content['thinking'] ?? '';
+                $results[] = new ThinkingResult(
+                    $thinking,
+                    $content['signature'] ?? null,
+                    '' === $thinking ? ThinkingContentType::OPAQUE : ThinkingContentType::SUMMARY,
+                );
+            } elseif ('redacted_thinking' === $type) {
+                $results[] = new ThinkingResult('', $content['data'] ?? null, ThinkingContentType::REDACTED);
             }
         }
 

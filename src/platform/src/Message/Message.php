@@ -116,7 +116,7 @@ final class Message
         }
 
         if ($part instanceof ThinkingResult) {
-            return [new Thinking($part->getContent() ?? '', $part->getSignature())];
+            return [new Thinking($part->getContent() ?? '', $part->getSignature(), $part->getContentType())];
         }
 
         if ($part instanceof ToolCallResult) {

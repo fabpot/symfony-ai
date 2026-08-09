@@ -11,6 +11,8 @@
 
 namespace Symfony\AI\Platform\Message\Content;
 
+use Symfony\AI\Platform\Result\ThinkingContentType;
+
 /**
  * Represents a thinking/reasoning block emitted by an assistant.
  *
@@ -22,6 +24,7 @@ final class Thinking implements ContentInterface
     public function __construct(
         private readonly string $content,
         private readonly ?string $signature = null,
+        private readonly ThinkingContentType $contentType = ThinkingContentType::FULL,
     ) {
     }
 
@@ -33,5 +36,10 @@ final class Thinking implements ContentInterface
     public function getSignature(): ?string
     {
         return $this->signature;
+    }
+
+    public function getContentType(): ThinkingContentType
+    {
+        return $this->contentType;
     }
 }

@@ -599,9 +599,11 @@ If you need access to all delta types (e.g. tool calls, thinking, metadata), use
 The following delta types are available:
 
 * :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\TextDelta` -- a chunk of generated text
-* :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ThinkingStart` -- signals the start of a full thinking or summary block
+* :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ThinkingStart`
+  -- signals the start of a full, summarized, or opaque thinking block
 * :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ThinkingDelta` -- a chunk of full model reasoning or its summary
-* :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ThinkingComplete` -- signals thinking is complete, includes accumulated thinking text and optional signature
+* :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ThinkingComplete`
+  -- signals thinking is complete, including optional content and provider state
 * :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ThinkingSignature` -- a cryptographic signature for a thinking block
 * :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ToolCallStart` -- signals the start of a tool call
 * :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ToolInputDelta` -- a chunk of tool call input data
@@ -750,6 +752,17 @@ may use for reasoning)::
         ],
     ]);
 
+Newer Anthropic models use adaptive thinking and can omit readable thinking by
+default. Request a summary explicitly when it should be available to consumers::
+
+    $result = $platform->invoke('claude-opus-4-8', $messages, [
+        'stream' => true,
+        'thinking' => [
+            'type' => 'adaptive',
+            'display' => 'summarized',
+        ],
+    ]);
+
 Consuming Thinking in Streams
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -761,18 +774,25 @@ deltas::
     use Symfony\AI\Platform\Result\Stream\Delta\TextDelta;
     use Symfony\AI\Platform\Result\Stream\Delta\ThinkingComplete;
     use Symfony\AI\Platform\Result\Stream\Delta\ThinkingDelta;
+    use Symfony\AI\Platform\Result\ThinkingContentType;
 
     foreach ($result->asStream() as $delta) {
         if ($delta instanceof ThinkingDelta) {
-            $label = $delta->isSummary() ? 'thinking summary' : 'thinking';
+            $label = ThinkingContentType::SUMMARY === $delta->getContentType()
+                ? 'thinking summary'
+                : 'thinking';
             echo '[' . $label . '] ' . $delta->getThinking();
 
             continue;
         }
 
         if ($delta instanceof ThinkingComplete) {
-            // The full thinking block is complete
-            echo '[thinking done] ' . $delta->getThinking() . "\n";
+            if (\in_array($delta->getContentType(), [
+                ThinkingContentType::FULL,
+                ThinkingContentType::SUMMARY,
+            ], true)) {
+                echo '[thinking done] ' . $delta->getThinking() . "\n";
+            }
 
             // Anthropic includes a cryptographic signature for verification
             if (null !== $delta->getSignature()) {
@@ -788,19 +808,27 @@ deltas::
         }
     }
 
-Providers can expose full model thinking or summaries of reasoning that remains
-hidden. The ``ThinkingStart``, ``ThinkingDelta`` and ``ThinkingComplete`` deltas
-return ``true`` from ``isSummary()`` for the latter.
+The ``getContentType()`` method distinguishes four forms of thinking:
+
+* ``ThinkingContentType::FULL`` contains the model's exposed reasoning
+* ``ThinkingContentType::SUMMARY`` contains a readable summary of hidden
+  reasoning
+* ``ThinkingContentType::OPAQUE`` contains no readable reasoning, but can carry
+  provider state that must be preserved for subsequent requests
+* ``ThinkingContentType::REDACTED`` contains reasoning hidden by a provider's
+  safety controls
 
 .. versionadded:: 0.13
 
-    The ``isSummary()`` method was introduced in Symfony AI 0.13.
+    The ``ThinkingContentType`` enum and ``getContentType()`` method were
+    introduced in Symfony AI 0.13.
 
 The ``ThinkingComplete`` delta also has these methods:
 
-* ``getThinking()`` (string): the model's accumulated reasoning text or summary
-* ``getSignature()`` (?string): a cryptographic signature (Anthropic only), required
-  when echoing thinking blocks back in multi-turn conversations
+* ``getThinking()`` (string): the model's accumulated reasoning text or summary,
+  or an empty string for opaque and redacted thinking
+* ``getSignature()`` (?string): provider state required when echoing thinking
+  blocks back in multi-turn conversations
 
 Multi-Turn Conversations with Thinking
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

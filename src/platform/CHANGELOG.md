@@ -4,7 +4,7 @@ CHANGELOG
 0.13
 ----
 
- * Add `ThinkingStart::isSummary()`, `ThinkingDelta::isSummary()`, and `ThinkingComplete::isSummary()` to distinguish summaries of hidden reasoning from fully streamed thinking
+ * Add `ThinkingContentType` for full, summarized, opaque, and redacted reasoning
  * [BC BREAK] Add `ListenerInterface::onError()` and `Result\Stream\ErrorEvent`, dispatched when draining a `StreamResult` throws, so a listener can finalize on a failed stream where `onComplete()` never fires; `AbstractStreamListener` provides a no-op default
 
 0.12

@@ -40,6 +40,7 @@ use Symfony\AI\Platform\Result\Stream\Delta\ToolCallStart;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolInputDelta;
 use Symfony\AI\Platform\Result\StreamResult;
 use Symfony\AI\Platform\Result\TextResult;
+use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCallResult;
 use Symfony\AI\Platform\TokenUsage\StreamListener as TokenUsageStreamListener;
@@ -523,6 +524,7 @@ final class ResultConverterTest extends TestCase
         //         ThinkingComplete (accumulated), TextDelta("The answer is 42.")
         $thinkingStarts = array_values(array_filter($chunks, static fn ($c) => $c instanceof ThinkingStart));
         $this->assertCount(1, $thinkingStarts);
+        $this->assertSame(ThinkingContentType::SUMMARY, $thinkingStarts[0]->getContentType());
 
         $thinkingDeltas = array_values(array_filter($chunks, static fn ($c) => $c instanceof ThinkingDelta));
         $this->assertCount(2, $thinkingDeltas);
@@ -536,6 +538,7 @@ final class ResultConverterTest extends TestCase
         $this->assertCount(1, $thinkingCompletes);
         $this->assertSame('Let me reason about this.', $thinkingCompletes[0]->getThinking());
         $this->assertSame('sig_abc123', $thinkingCompletes[0]->getSignature());
+        $this->assertSame(ThinkingContentType::SUMMARY, $thinkingCompletes[0]->getContentType());
 
         $textDeltas = array_values(array_filter($chunks, static fn ($c) => $c instanceof TextDelta));
         $this->assertCount(1, $textDeltas);
@@ -620,6 +623,55 @@ final class ResultConverterTest extends TestCase
         $this->assertNull($thinkingCompletes[0]->getSignature());
     }
 
+    public function testStreamingOpaqueThinkingWithoutText()
+    {
+        $converter = new ResultConverter();
+        $events = [
+            ['type' => 'message_start', 'message' => ['id' => 'msg_opaque', 'role' => 'assistant', 'content' => []]],
+            ['type' => 'content_block_start', 'index' => 0, 'content_block' => ['type' => 'thinking', 'thinking' => '', 'signature' => '']],
+            ['type' => 'content_block_delta', 'index' => 0, 'delta' => ['type' => 'signature_delta', 'signature' => 'opaque_sig']],
+            ['type' => 'content_block_stop', 'index' => 0],
+            ['type' => 'message_stop'],
+        ];
+
+        $streamResult = $converter->convert($this->createRawResult($events), ['stream' => true]);
+        $this->assertInstanceOf(StreamResult::class, $streamResult);
+        $chunks = iterator_to_array($streamResult->getContent());
+
+        $this->assertInstanceOf(ThinkingStart::class, $chunks[0]);
+        $this->assertSame(ThinkingContentType::OPAQUE, $chunks[0]->getContentType());
+        $this->assertInstanceOf(ThinkingSignature::class, $chunks[1]);
+        $this->assertSame('opaque_sig', $chunks[1]->getSignature());
+        $this->assertInstanceOf(ThinkingComplete::class, $chunks[2]);
+        $this->assertSame('', $chunks[2]->getThinking());
+        $this->assertSame('opaque_sig', $chunks[2]->getSignature());
+        $this->assertSame(ThinkingContentType::OPAQUE, $chunks[2]->getContentType());
+    }
+
+    public function testStreamingRedactedThinking()
+    {
+        $converter = new ResultConverter();
+        $events = [
+            ['type' => 'message_start', 'message' => ['id' => 'msg_redacted', 'role' => 'assistant', 'content' => []]],
+            ['type' => 'content_block_start', 'index' => 0, 'content_block' => ['type' => 'redacted_thinking', 'data' => 'redacted_data']],
+            ['type' => 'content_block_stop', 'index' => 0],
+            ['type' => 'message_stop'],
+        ];
+
+        $streamResult = $converter->convert($this->createRawResult($events), ['stream' => true]);
+        $this->assertInstanceOf(StreamResult::class, $streamResult);
+        $chunks = iterator_to_array($streamResult->getContent());
+
+        $this->assertInstanceOf(ThinkingStart::class, $chunks[0]);
+        $this->assertSame(ThinkingContentType::REDACTED, $chunks[0]->getContentType());
+        $this->assertInstanceOf(ThinkingSignature::class, $chunks[1]);
+        $this->assertSame('redacted_data', $chunks[1]->getSignature());
+        $this->assertInstanceOf(ThinkingComplete::class, $chunks[2]);
+        $this->assertSame('', $chunks[2]->getThinking());
+        $this->assertSame('redacted_data', $chunks[2]->getSignature());
+        $this->assertSame(ThinkingContentType::REDACTED, $chunks[2]->getContentType());
+    }
+
     public function testConvertWithTextPreambleBeforeToolCallYieldsMultiPartResult()
     {
         $httpClient = new MockHttpClient(new JsonMockResponse([
@@ -683,8 +735,62 @@ final class ResultConverterTest extends TestCase
         $this->assertInstanceOf(ThinkingResult::class, $parts[0]);
         $this->assertSame('Let me reason about this...', $parts[0]->getContent());
         $this->assertSame('sig_abc123', $parts[0]->getSignature());
+        $this->assertSame(ThinkingContentType::SUMMARY, $parts[0]->getContentType());
         $this->assertInstanceOf(TextResult::class, $parts[1]);
         $this->assertSame('The answer is 42.', $parts[1]->getContent());
+    }
+
+    public function testNonStreamingResponseWithOpaqueThinking()
+    {
+        $httpClient = new MockHttpClient(new JsonMockResponse([
+            'content' => [
+                [
+                    'type' => 'thinking',
+                    'thinking' => '',
+                    'signature' => 'opaque_sig',
+                ],
+                [
+                    'type' => 'text',
+                    'text' => 'The answer is 42.',
+                ],
+            ],
+        ]));
+        $converter = new ResultConverter();
+
+        $result = $converter->convert(new RawHttpResult($httpClient->request('POST', 'https://api.anthropic.com/v1/messages')));
+
+        $this->assertInstanceOf(MultiPartResult::class, $result);
+        $parts = $result->getContent();
+        $this->assertInstanceOf(ThinkingResult::class, $parts[0]);
+        $this->assertSame('', $parts[0]->getContent());
+        $this->assertSame('opaque_sig', $parts[0]->getSignature());
+        $this->assertSame(ThinkingContentType::OPAQUE, $parts[0]->getContentType());
+    }
+
+    public function testNonStreamingResponseWithRedactedThinking()
+    {
+        $httpClient = new MockHttpClient(new JsonMockResponse([
+            'content' => [
+                [
+                    'type' => 'redacted_thinking',
+                    'data' => 'redacted_data',
+                ],
+                [
+                    'type' => 'text',
+                    'text' => 'The answer is 42.',
+                ],
+            ],
+        ]));
+        $converter = new ResultConverter();
+
+        $result = $converter->convert(new RawHttpResult($httpClient->request('POST', 'https://api.anthropic.com/v1/messages')));
+
+        $this->assertInstanceOf(MultiPartResult::class, $result);
+        $parts = $result->getContent();
+        $this->assertInstanceOf(ThinkingResult::class, $parts[0]);
+        $this->assertSame('', $parts[0]->getContent());
+        $this->assertSame('redacted_data', $parts[0]->getSignature());
+        $this->assertSame(ThinkingContentType::REDACTED, $parts[0]->getContentType());
     }
 
     public function testNonStreamingResponseWithOnlyThinkingContent()
@@ -707,6 +813,7 @@ final class ResultConverterTest extends TestCase
         $this->assertInstanceOf(ThinkingResult::class, $result);
         $this->assertSame('Reasoning only...', $result->getContent());
         $this->assertSame('sig_xyz', $result->getSignature());
+        $this->assertSame(ThinkingContentType::SUMMARY, $result->getContentType());
     }
 
     public function testThrowsServerExceptionOnServerErrorStatusBeforeStreaming()

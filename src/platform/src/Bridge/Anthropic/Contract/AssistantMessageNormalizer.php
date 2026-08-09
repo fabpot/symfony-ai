@@ -19,6 +19,7 @@ use Symfony\AI\Platform\Message\Content\ExecutableCode;
 use Symfony\AI\Platform\Message\Content\Text;
 use Symfony\AI\Platform\Message\Content\Thinking;
 use Symfony\AI\Platform\Model;
+use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ToolCall;
 
 /**
@@ -32,7 +33,7 @@ final class AssistantMessageNormalizer extends ModelContractNormalizer
      * @return array{
      *     role: 'assistant',
      *     content: string|list<array{
-     *         type: 'thinking'|'text'|'tool_use'|'server_tool_use'|'bash_code_execution_tool_result'|'text_editor_code_execution_tool_result',
+     *         type: 'thinking'|'redacted_thinking'|'text'|'tool_use'|'server_tool_use'|'bash_code_execution_tool_result'|'text_editor_code_execution_tool_result',
      *         id?: string,
      *         tool_use_id?: string,
      *         name?: string,
@@ -40,7 +41,8 @@ final class AssistantMessageNormalizer extends ModelContractNormalizer
      *         content?: array<string, mixed>,
      *         text?: string,
      *         thinking?: string,
-     *         signature?: string
+     *         signature?: string,
+     *         data?: string
      *     }>
      * }
      */
@@ -66,6 +68,14 @@ final class AssistantMessageNormalizer extends ModelContractNormalizer
         $executedAsBash = [];
         foreach ($parts as $part) {
             if ($part instanceof Thinking) {
+                if (ThinkingContentType::REDACTED === $part->getContentType()) {
+                    $blocks[] = [
+                        'type' => 'redacted_thinking',
+                        'data' => $part->getSignature() ?? '',
+                    ];
+                    continue;
+                }
+
                 $block = [
                     'type' => 'thinking',
                     'thinking' => $part->getContent(),

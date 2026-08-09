@@ -21,6 +21,7 @@ use Symfony\AI\Platform\Bridge\Bedrock\RawBedrockResult;
 use Symfony\AI\Platform\Exception\RuntimeException;
 use Symfony\AI\Platform\Result\MultiPartResult;
 use Symfony\AI\Platform\Result\TextResult;
+use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCallResult;
 
@@ -253,6 +254,7 @@ final class ClaudeResultConverterTest extends TestCase
         $this->assertInstanceOf(ThinkingResult::class, $parts[0]);
         $this->assertSame('', $parts[0]->getContent());
         $this->assertSame('abc', $parts[0]->getSignature());
+        $this->assertSame(ThinkingContentType::OPAQUE, $parts[0]->getContentType());
 
         $this->assertInstanceOf(TextResult::class, $parts[1]);
         $this->assertSame('{"result": 1}', $parts[1]->getContent());
@@ -320,6 +322,35 @@ final class ClaudeResultConverterTest extends TestCase
         $this->assertInstanceOf(ThinkingResult::class, $result);
         $this->assertSame('', $result->getContent());
         $this->assertSame('abc', $result->getSignature());
+    }
+
+    #[TestDox('Converts redacted thinking to opaque thinking')]
+    public function testConvertRedactedThinking()
+    {
+        $invokeResponse = ResultMockFactory::create(InvokeModelResponse::class, [
+            'body' => json_encode([
+                'content' => [
+                    [
+                        'type' => 'redacted_thinking',
+                        'data' => 'redacted_data',
+                    ],
+                    [
+                        'type' => 'text',
+                        'text' => 'Visible response',
+                    ],
+                ],
+            ]),
+        ]);
+        $converter = new ClaudeResultConverter();
+
+        $result = $converter->convert(new RawBedrockResult($invokeResponse));
+
+        $this->assertInstanceOf(MultiPartResult::class, $result);
+        $parts = $result->getContent();
+        $this->assertInstanceOf(ThinkingResult::class, $parts[0]);
+        $this->assertSame('', $parts[0]->getContent());
+        $this->assertSame('redacted_data', $parts[0]->getSignature());
+        $this->assertSame(ThinkingContentType::REDACTED, $parts[0]->getContentType());
     }
 
     #[TestDox('Converts text content successfully')]

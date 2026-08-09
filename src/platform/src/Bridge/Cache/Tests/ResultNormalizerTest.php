@@ -23,6 +23,7 @@ use Symfony\AI\Platform\Result\ObjectResult;
 use Symfony\AI\Platform\Result\ResultInterface;
 use Symfony\AI\Platform\Result\StreamResult;
 use Symfony\AI\Platform\Result\TextResult;
+use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCall;
 use Symfony\AI\Platform\Result\ToolCallResult;
@@ -134,7 +135,7 @@ final class ResultNormalizerTest extends TestCase
                 'payload' => [
                     [
                         'class' => ThinkingResult::class,
-                        'payload' => ['content' => 'thinking…', 'signature' => null],
+                        'payload' => ['content' => 'thinking…', 'signature' => null, 'contentType' => 'full'],
                     ],
                     [
                         'class' => TextResult::class,
@@ -144,10 +145,10 @@ final class ResultNormalizerTest extends TestCase
             ],
         ];
         yield ThinkingResult::class => [
-            new ThinkingResult('reasoning summary', 'sig_abc'),
+            new ThinkingResult('reasoning summary', 'sig_abc', ThinkingContentType::SUMMARY),
             [
                 'class' => ThinkingResult::class,
-                'payload' => ['content' => 'reasoning summary', 'signature' => 'sig_abc'],
+                'payload' => ['content' => 'reasoning summary', 'signature' => 'sig_abc', 'contentType' => 'summary'],
             ],
         ];
         yield ObjectResult::class.'-array' => [

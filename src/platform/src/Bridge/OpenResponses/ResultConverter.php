@@ -44,6 +44,7 @@ use Symfony\AI\Platform\Result\Stream\Delta\ThinkingStart;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallComplete;
 use Symfony\AI\Platform\Result\StreamResult;
 use Symfony\AI\Platform\Result\TextResult;
+use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCall;
 use Symfony\AI\Platform\Result\ToolCallResult;
@@ -499,14 +500,14 @@ class ResultConverter implements ResultConverterInterface
             if ('response.reasoning_summary_text.delta' === $type && isset($event['delta'])) {
                 if (null === $currentThinking) {
                     $currentThinking = '';
-                    yield new ThinkingStart(summary: true);
+                    yield new ThinkingStart(ThinkingContentType::SUMMARY);
                 }
                 $currentThinking .= $event['delta'];
-                yield new ThinkingDelta($event['delta'], summary: true);
+                yield new ThinkingDelta($event['delta'], ThinkingContentType::SUMMARY);
             }
 
             if ('response.reasoning_summary_text.done' === $type) {
-                yield new ThinkingComplete($currentThinking ?? '', summary: true);
+                yield new ThinkingComplete($currentThinking ?? '', contentType: ThinkingContentType::SUMMARY);
                 $currentThinking = null;
             }
 
@@ -522,7 +523,22 @@ class ResultConverter implements ResultConverterInterface
             // thinking signature so that requests using "store" => false can
             // replay it on subsequent turns.
             if ('response.output_item.done' === $type && \is_array($event['item'] ?? null) && 'reasoning' === ($event['item']['type'] ?? null)) {
-                yield new ThinkingSignature(json_encode($event['item'], \JSON_THROW_ON_ERROR));
+                $signature = json_encode($event['item'], \JSON_THROW_ON_ERROR);
+                $hasSummary = false;
+                foreach ($event['item']['summary'] ?? [] as $summary) {
+                    if ('' !== ($summary['text'] ?? '')) {
+                        $hasSummary = true;
+                        break;
+                    }
+                }
+
+                if (!$hasSummary) {
+                    yield new ThinkingStart(ThinkingContentType::OPAQUE);
+                }
+                yield new ThinkingSignature($signature);
+                if (!$hasSummary) {
+                    yield new ThinkingComplete('', $signature, ThinkingContentType::OPAQUE);
+                }
             }
 
             if ('response.completed' !== $type) {
@@ -634,13 +650,13 @@ class ResultConverter implements ResultConverterInterface
 
         foreach ($item['summary'] ?? [] as $entry) {
             if ('' !== ($entry['text'] ?? '')) {
-                yield new ThinkingResult($entry['text'], $signature);
+                yield new ThinkingResult($entry['text'], $signature, ThinkingContentType::SUMMARY);
                 $signature = null;
             }
         }
 
         if (null !== $signature && isset($item['encrypted_content'])) {
-            yield new ThinkingResult(null, $signature);
+            yield new ThinkingResult(null, $signature, ThinkingContentType::OPAQUE);
         }
     }
 

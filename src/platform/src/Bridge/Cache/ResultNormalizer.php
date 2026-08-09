@@ -19,6 +19,7 @@ use Symfony\AI\Platform\Result\ObjectResult;
 use Symfony\AI\Platform\Result\ResultInterface;
 use Symfony\AI\Platform\Result\StreamResult;
 use Symfony\AI\Platform\Result\TextResult;
+use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCall;
 use Symfony\AI\Platform\Result\ToolCallResult;
@@ -68,6 +69,7 @@ final class ResultNormalizer implements NormalizerInterface, DenormalizerInterfa
                 ThinkingResult::class => [
                     'content' => $data->getContent(),
                     'signature' => $data->getSignature(),
+                    'contentType' => $data->getContentType()->value,
                 ],
                 ObjectResult::class => [
                     'type' => get_debug_type($data->getContent()),
@@ -108,7 +110,11 @@ final class ResultNormalizer implements NormalizerInterface, DenormalizerInterfa
                 fn (array $part): ResultInterface => $this->denormalize($part, $type, $format, $context),
                 $data['payload']
             )),
-            ThinkingResult::class => new ThinkingResult($data['payload']['content'], $data['payload']['signature']),
+            ThinkingResult::class => new ThinkingResult(
+                $data['payload']['content'],
+                $data['payload']['signature'],
+                ThinkingContentType::from($data['payload']['contentType'] ?? ThinkingContentType::FULL->value),
+            ),
             ObjectResult::class => new ObjectResult('array' === $data['payload']['type'] ? $data['payload']['content'] : $this->objectNormalizer->denormalize($data['payload']['content'], $data['payload']['type'], $format, $context)),
             TextResult::class => new TextResult($data['payload']),
             ToolCallResult::class => new ToolCallResult(array_map(

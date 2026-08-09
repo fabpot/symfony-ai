@@ -48,6 +48,7 @@ use Symfony\AI\Platform\Result\Stream\Delta\ThinkingStart;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallComplete;
 use Symfony\AI\Platform\Result\StreamResult;
 use Symfony\AI\Platform\Result\TextResult;
+use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCallResult;
 use Symfony\AI\Platform\Result\WebSearchResult;
@@ -218,6 +219,7 @@ final class ResultConverterTest extends TestCase
         $this->assertCount(2, $parts);
         $this->assertInstanceOf(ThinkingResult::class, $parts[0]);
         $this->assertSame('Let me work through this.', $parts[0]->getContent());
+        $this->assertSame(ThinkingContentType::SUMMARY, $parts[0]->getContentType());
         $this->assertInstanceOf(TextResult::class, $parts[1]);
         $this->assertSame('{"answer": 42}', $parts[1]->getContent());
     }
@@ -328,6 +330,7 @@ final class ResultConverterTest extends TestCase
         $parts = $result->getContent();
         $this->assertInstanceOf(ThinkingResult::class, $parts[0]);
         $this->assertNull($parts[0]->getContent());
+        $this->assertSame(ThinkingContentType::OPAQUE, $parts[0]->getContentType());
         $this->assertSame($reasoningItem, json_decode($parts[0]->getSignature(), true));
     }
 
@@ -1492,16 +1495,16 @@ final class ResultConverterTest extends TestCase
 
         $this->assertCount(6, $chunks);
         $this->assertInstanceOf(ThinkingStart::class, $chunks[0]);
-        $this->assertTrue($chunks[0]->isSummary());
+        $this->assertSame(ThinkingContentType::SUMMARY, $chunks[0]->getContentType());
         $this->assertInstanceOf(ThinkingDelta::class, $chunks[1]);
         $this->assertSame('Let me think', $chunks[1]->getThinking());
-        $this->assertTrue($chunks[1]->isSummary());
+        $this->assertSame(ThinkingContentType::SUMMARY, $chunks[1]->getContentType());
         $this->assertInstanceOf(ThinkingDelta::class, $chunks[2]);
         $this->assertSame(' about this...', $chunks[2]->getThinking());
-        $this->assertTrue($chunks[2]->isSummary());
+        $this->assertSame(ThinkingContentType::SUMMARY, $chunks[2]->getContentType());
         $this->assertInstanceOf(ThinkingComplete::class, $chunks[3]);
         $this->assertSame('Let me think about this...', $chunks[3]->getThinking());
-        $this->assertTrue($chunks[3]->isSummary());
+        $this->assertSame(ThinkingContentType::SUMMARY, $chunks[3]->getContentType());
         $this->assertInstanceOf(TextDelta::class, $chunks[4]);
         $this->assertSame('The answer is 42.', $chunks[4]->getText());
     }
@@ -1550,6 +1553,45 @@ final class ResultConverterTest extends TestCase
         $this->assertInstanceOf(ThinkingSignature::class, $chunks[0]);
         $this->assertSame($reasoningItem, json_decode($chunks[0]->getSignature(), true));
         $this->assertInstanceOf(TextDelta::class, $chunks[1]);
+    }
+
+    public function testStreamFramesOpaqueReasoningItems()
+    {
+        $converter = new ResultConverter();
+
+        $httpResponse = $this->createStub(ResponseInterface::class);
+        $httpResponse->method('getStatusCode')->willReturn(200);
+
+        $reasoningItem = [
+            'type' => 'reasoning',
+            'id' => 'rs_1',
+            'summary' => [],
+            'encrypted_content' => 'gAAAAA-encrypted',
+        ];
+        $events = [
+            [
+                'type' => 'response.output_item.done',
+                'item' => $reasoningItem,
+            ],
+            [
+                'type' => 'response.completed',
+                'response' => ['output' => []],
+            ],
+        ];
+
+        $raw = new InMemoryRawResult([], $events, $httpResponse);
+        $streamResult = $converter->convert($raw, ['stream' => true]);
+
+        $this->assertInstanceOf(StreamResult::class, $streamResult);
+        $chunks = iterator_to_array($streamResult->getContent());
+
+        $this->assertInstanceOf(ThinkingStart::class, $chunks[0]);
+        $this->assertSame(ThinkingContentType::OPAQUE, $chunks[0]->getContentType());
+        $this->assertInstanceOf(ThinkingSignature::class, $chunks[1]);
+        $this->assertSame($reasoningItem, json_decode($chunks[1]->getSignature(), true));
+        $this->assertInstanceOf(ThinkingComplete::class, $chunks[2]);
+        $this->assertSame('', $chunks[2]->getThinking());
+        $this->assertSame(ThinkingContentType::OPAQUE, $chunks[2]->getContentType());
     }
 
     public function testThrowsServerExceptionOnServerErrorStatusBeforeStreaming()

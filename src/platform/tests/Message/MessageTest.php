@@ -38,6 +38,7 @@ use Symfony\AI\Platform\Result\McpCallResult;
 use Symfony\AI\Platform\Result\McpListToolsResult;
 use Symfony\AI\Platform\Result\MultiPartResult;
 use Symfony\AI\Platform\Result\TextResult;
+use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCall;
 use Symfony\AI\Platform\Result\ToolCallResult;
@@ -144,7 +145,7 @@ final class MessageTest extends TestCase
     public function testCreateAssistantMessageFromMultiPartResultMapsKnownResultTypes()
     {
         $result = new MultiPartResult([
-            new ThinkingResult('Reasoning...', 'sig'),
+            new ThinkingResult('Reasoning...', 'sig', ThinkingContentType::SUMMARY),
             new TextResult('Visible answer.'),
             new ToolCallResult([new ToolCall('id1', 'fn', ['x' => 1])]),
             new ExecutableCodeResult('echo hi', 'bash', 'srvtoolu_1'),
@@ -156,6 +157,7 @@ final class MessageTest extends TestCase
         $parts = $message->getContent();
         $this->assertCount(5, $parts);
         $this->assertInstanceOf(Thinking::class, $parts[0]);
+        $this->assertSame(ThinkingContentType::SUMMARY, $parts[0]->getContentType());
         $this->assertInstanceOf(Text::class, $parts[1]);
         $this->assertInstanceOf(ToolCall::class, $parts[2]);
         $this->assertInstanceOf(ExecutableCode::class, $parts[3]);

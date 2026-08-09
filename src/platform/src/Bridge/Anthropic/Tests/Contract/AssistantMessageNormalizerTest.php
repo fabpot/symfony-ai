@@ -19,6 +19,7 @@ use Symfony\AI\Platform\Contract;
 use Symfony\AI\Platform\Message\AssistantMessage;
 use Symfony\AI\Platform\Message\Content\Text;
 use Symfony\AI\Platform\Message\Content\Thinking;
+use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ToolCall;
 
 final class AssistantMessageNormalizerTest extends TestCase
@@ -59,13 +60,14 @@ final class AssistantMessageNormalizerTest extends TestCase
      *     1: array{
      *         role: 'assistant',
      *         content: string|list<array{
-     *             type: 'tool_use'|'text'|'thinking',
+     *             type: 'tool_use'|'text'|'thinking'|'redacted_thinking',
      *             id?: string,
      *             name?: string,
      *             input?: array<string, mixed>|\stdClass,
      *             text?: string,
      *             thinking?: string,
-     *             signature?: string
+     *             signature?: string,
+     *             data?: string
      *         }>
      *     }
      * }>
@@ -205,6 +207,34 @@ final class AssistantMessageNormalizerTest extends TestCase
                 'role' => 'assistant',
                 'content' => [
                     ['type' => 'thinking', 'thinking' => 'I should read this file.', 'signature' => 'sig_123'],
+                    ['type' => 'tool_use', 'id' => 'id1', 'name' => 'read', 'input' => ['path' => '/etc/hosts']],
+                ],
+            ],
+        ];
+
+        yield 'opaque thinking' => [
+            new AssistantMessage(
+                new Thinking('', 'opaque_sig', ThinkingContentType::OPAQUE),
+                new ToolCall('id1', 'read', ['path' => '/etc/hosts']),
+            ),
+            [
+                'role' => 'assistant',
+                'content' => [
+                    ['type' => 'thinking', 'thinking' => '', 'signature' => 'opaque_sig'],
+                    ['type' => 'tool_use', 'id' => 'id1', 'name' => 'read', 'input' => ['path' => '/etc/hosts']],
+                ],
+            ],
+        ];
+
+        yield 'redacted thinking' => [
+            new AssistantMessage(
+                new Thinking('', 'redacted_data', ThinkingContentType::REDACTED),
+                new ToolCall('id1', 'read', ['path' => '/etc/hosts']),
+            ),
+            [
+                'role' => 'assistant',
+                'content' => [
+                    ['type' => 'redacted_thinking', 'data' => 'redacted_data'],
                     ['type' => 'tool_use', 'id' => 'id1', 'name' => 'read', 'input' => ['path' => '/etc/hosts']],
                 ],
             ],

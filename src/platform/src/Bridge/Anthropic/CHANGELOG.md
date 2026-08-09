@@ -1,6 +1,11 @@
 CHANGELOG
 =========
 
+0.13
+----
+
+ * Preserve omitted and redacted thinking as opaque content that can be replayed across requests
+
 0.12
 ----
 

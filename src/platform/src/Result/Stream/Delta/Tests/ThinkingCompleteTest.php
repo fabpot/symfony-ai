@@ -13,6 +13,7 @@ namespace Symfony\AI\Platform\Result\Stream\Delta\Tests;
 
 use PHPUnit\Framework\TestCase;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingComplete;
+use Symfony\AI\Platform\Result\ThinkingContentType;
 
 final class ThinkingCompleteTest extends TestCase
 {
@@ -22,7 +23,7 @@ final class ThinkingCompleteTest extends TestCase
 
         $this->assertSame('Let me think about this...', $content->getThinking());
         $this->assertSame('sig_abc123', $content->getSignature());
-        $this->assertFalse($content->isSummary());
+        $this->assertSame(ThinkingContentType::FULL, $content->getContentType());
     }
 
     public function testThinkingCompleteWithoutSignature()
@@ -31,14 +32,22 @@ final class ThinkingCompleteTest extends TestCase
 
         $this->assertSame('reasoning here', $content->getThinking());
         $this->assertNull($content->getSignature());
-        $this->assertFalse($content->isSummary());
+        $this->assertSame(ThinkingContentType::FULL, $content->getContentType());
     }
 
     public function testThinkingSummary()
     {
-        $content = new ThinkingComplete('Summarized reasoning', summary: true);
+        $content = new ThinkingComplete('Summarized reasoning', contentType: ThinkingContentType::SUMMARY);
 
         $this->assertSame('Summarized reasoning', $content->getThinking());
-        $this->assertTrue($content->isSummary());
+        $this->assertSame(ThinkingContentType::SUMMARY, $content->getContentType());
+    }
+
+    public function testOpaqueThinking()
+    {
+        $content = new ThinkingComplete('', 'opaque', ThinkingContentType::OPAQUE);
+
+        $this->assertSame('', $content->getThinking());
+        $this->assertSame(ThinkingContentType::OPAQUE, $content->getContentType());
     }
 }

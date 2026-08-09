@@ -26,6 +26,7 @@ use Symfony\AI\Platform\Message\MessageInterface;
 use Symfony\AI\Platform\Message\Role;
 use Symfony\AI\Platform\Message\ToolCallMessage;
 use Symfony\AI\Platform\Message\UserMessage;
+use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ToolCall;
 use Symfony\Component\Serializer\Encoder\JsonEncoder;
 use Symfony\Component\Serializer\Normalizer\ArrayDenormalizer;
@@ -226,10 +227,10 @@ final class MessageNormalizerTest extends TestCase
         ], [new JsonEncoder()]);
 
         $message = new AssistantMessage(
-            new Thinking('First thought.', 'sig_1'),
+            new Thinking('First thought.', 'sig_1', ThinkingContentType::SUMMARY),
             new Text('Intermediate text.'),
             new ToolCall('call-1', 'run', ['x' => 1]),
-            new Thinking('Second thought.', 'sig_2'),
+            new Thinking('', 'sig_2', ThinkingContentType::OPAQUE),
             new Text('Trailing text.'),
         );
 
@@ -242,13 +243,15 @@ final class MessageNormalizerTest extends TestCase
         $this->assertInstanceOf(Thinking::class, $parts[0]);
         $this->assertSame('First thought.', $parts[0]->getContent());
         $this->assertSame('sig_1', $parts[0]->getSignature());
+        $this->assertSame(ThinkingContentType::SUMMARY, $parts[0]->getContentType());
         $this->assertInstanceOf(Text::class, $parts[1]);
         $this->assertSame('Intermediate text.', $parts[1]->getText());
         $this->assertInstanceOf(ToolCall::class, $parts[2]);
         $this->assertSame('call-1', $parts[2]->getId());
         $this->assertInstanceOf(Thinking::class, $parts[3]);
-        $this->assertSame('Second thought.', $parts[3]->getContent());
+        $this->assertSame('', $parts[3]->getContent());
         $this->assertSame('sig_2', $parts[3]->getSignature());
+        $this->assertSame(ThinkingContentType::OPAQUE, $parts[3]->getContentType());
         $this->assertInstanceOf(Text::class, $parts[4]);
         $this->assertSame('Trailing text.', $parts[4]->getText());
     }

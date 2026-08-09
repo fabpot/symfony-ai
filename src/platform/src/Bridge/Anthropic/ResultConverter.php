@@ -39,6 +39,7 @@ use Symfony\AI\Platform\Result\Stream\Delta\ToolCallStart;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolInputDelta;
 use Symfony\AI\Platform\Result\StreamResult;
 use Symfony\AI\Platform\Result\TextResult;
+use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCall;
 use Symfony\AI\Platform\Result\ToolCallResult;
@@ -140,7 +141,14 @@ class ResultConverter implements ResultConverterInterface
             } elseif ('text_editor_code_execution_tool_result' === $content['type']) {
                 $results[] = new CodeExecutionResult(true, null, $content['tool_use_id']);
             } elseif ('thinking' === $content['type']) {
-                $results[] = new ThinkingResult($content['thinking'], $content['signature'] ?? null);
+                $thinking = $content['thinking'] ?? '';
+                $results[] = new ThinkingResult(
+                    $thinking,
+                    $content['signature'] ?? null,
+                    '' === $thinking ? ThinkingContentType::OPAQUE : ThinkingContentType::SUMMARY,
+                );
+            } elseif ('redacted_thinking' === $content['type']) {
+                $results[] = new ThinkingResult('', $content['data'] ?? null, ThinkingContentType::REDACTED);
             }
         }
 
@@ -166,6 +174,7 @@ class ResultConverter implements ResultConverterInterface
         $currentToolCallJson = '';
         $currentThinking = null;
         $currentThinkingSignature = null;
+        $currentThinkingContentType = null;
         $inMessage = false;
         $stopReason = null;
         $outputTokens = null;
@@ -222,33 +231,40 @@ class ResultConverter implements ResultConverterInterface
                 continue;
             }
 
-            // Handle thinking content block start
-            if ('content_block_start' === $type
-                && isset($data['content_block']['type'])
-                && 'thinking' === $data['content_block']['type']
-            ) {
+            if ('content_block_start' === $type && 'thinking' === ($data['content_block']['type'] ?? null)) {
                 $currentThinking = '';
                 $currentThinkingSignature = null;
-                yield new ThinkingStart();
+                $currentThinkingContentType = null;
                 continue;
             }
 
-            // Handle thinking content deltas
-            if ('content_block_delta' === $type
-                && isset($data['delta']['type'])
-                && 'thinking_delta' === $data['delta']['type']
-            ) {
+            if ('content_block_start' === $type && 'redacted_thinking' === ($data['content_block']['type'] ?? null)) {
+                $currentThinking = '';
+                $currentThinkingSignature = $data['content_block']['data'] ?? null;
+                $currentThinkingContentType = ThinkingContentType::REDACTED;
+                yield new ThinkingStart($currentThinkingContentType);
+                if (null !== $currentThinkingSignature) {
+                    yield new ThinkingSignature($currentThinkingSignature);
+                }
+                continue;
+            }
+
+            if ('content_block_delta' === $type && 'thinking_delta' === ($data['delta']['type'] ?? null)) {
+                if (null === $currentThinkingContentType) {
+                    $currentThinkingContentType = ThinkingContentType::SUMMARY;
+                    yield new ThinkingStart($currentThinkingContentType);
+                }
                 $thinking = $data['delta']['thinking'] ?? '';
-                $currentThinking .= $thinking;
-                yield new ThinkingDelta($thinking);
+                $currentThinking = ($currentThinking ?? '').$thinking;
+                yield new ThinkingDelta($thinking, $currentThinkingContentType);
                 continue;
             }
 
-            // Handle thinking signature deltas
-            if ('content_block_delta' === $type
-                && isset($data['delta']['type'])
-                && 'signature_delta' === $data['delta']['type']
-            ) {
+            if ('content_block_delta' === $type && 'signature_delta' === ($data['delta']['type'] ?? null)) {
+                if (null === $currentThinkingContentType) {
+                    $currentThinkingContentType = ThinkingContentType::OPAQUE;
+                    yield new ThinkingStart($currentThinkingContentType);
+                }
                 $signature = $data['delta']['signature'] ?? '';
                 $currentThinkingSignature = ($currentThinkingSignature ?? '').$signature;
                 yield new ThinkingSignature($signature);
@@ -284,10 +300,11 @@ class ResultConverter implements ResultConverterInterface
 
             // Handle content block stop - finalize current thinking or tool call
             if ('content_block_stop' === $type) {
-                if (null !== $currentThinking) {
-                    yield new ThinkingComplete($currentThinking, $currentThinkingSignature);
+                if (null !== $currentThinkingContentType) {
+                    yield new ThinkingComplete($currentThinking, $currentThinkingSignature, $currentThinkingContentType);
                     $currentThinking = null;
                     $currentThinkingSignature = null;
+                    $currentThinkingContentType = null;
                     continue;
                 }
 

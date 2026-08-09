@@ -27,6 +27,7 @@ use Symfony\AI\Platform\Result\Stream\Delta\ToolCallComplete;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallStart;
 use Symfony\AI\Platform\Result\Stream\DeltaEvent;
 use Symfony\AI\Platform\Result\Stream\StartEvent;
+use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ToolCallResult;
 
 /**
@@ -92,12 +93,16 @@ final class StreamListener extends AbstractStreamListener
             }
             $this->currentThinkingIndex = null;
         } elseif ($delta instanceof ThinkingStart) {
-            $this->startThinking();
+            $this->startThinking($delta->getContentType());
         } elseif ($delta instanceof ThinkingDelta) {
-            $index = $this->currentThinkingIndex ?? $this->startThinking();
+            $index = $this->currentThinkingIndex ?? $this->startThinking($delta->getContentType());
             /** @var Thinking $thinking */
             $thinking = $this->assistantContent[$index];
-            $this->assistantContent[$index] = new Thinking($thinking->getContent().$delta->getThinking(), $thinking->getSignature());
+            $this->assistantContent[$index] = new Thinking(
+                $thinking->getContent().$delta->getThinking(),
+                $thinking->getSignature(),
+                $delta->getContentType(),
+            );
         } elseif ($delta instanceof ThinkingSignature) {
             $index = $this->currentThinkingIndex;
             if (null === $index) {
@@ -113,13 +118,21 @@ final class StreamListener extends AbstractStreamListener
 
             /** @var Thinking $thinking */
             $thinking = $this->assistantContent[$index];
-            $this->assistantContent[$index] = new Thinking($thinking->getContent(), ($thinking->getSignature() ?? '').$delta->getSignature());
+            $this->assistantContent[$index] = new Thinking(
+                $thinking->getContent(),
+                ($thinking->getSignature() ?? '').$delta->getSignature(),
+                $thinking->getContentType(),
+            );
             $this->lastThinkingIndex = $index;
         } elseif ($delta instanceof ThinkingComplete) {
-            $index = $this->currentThinkingIndex ?? $this->startThinking();
+            $index = $this->currentThinkingIndex ?? $this->startThinking($delta->getContentType());
             /** @var Thinking $thinking */
             $thinking = $this->assistantContent[$index];
-            $this->assistantContent[$index] = new Thinking($delta->getThinking(), $delta->getSignature() ?? $thinking->getSignature());
+            $this->assistantContent[$index] = new Thinking(
+                $delta->getThinking(),
+                $delta->getSignature() ?? $thinking->getSignature(),
+                $delta->getContentType(),
+            );
             $this->currentThinkingIndex = null;
             $this->lastThinkingIndex = $index;
         } elseif ($delta instanceof ToolCallStart) {
@@ -184,9 +197,9 @@ final class StreamListener extends AbstractStreamListener
         }
     }
 
-    private function startThinking(): int
+    private function startThinking(ThinkingContentType $contentType = ThinkingContentType::FULL): int
     {
-        $this->assistantContent[] = new Thinking('');
+        $this->assistantContent[] = new Thinking('', contentType: $contentType);
 
         return $this->currentThinkingIndex = $this->lastThinkingIndex = array_key_last($this->assistantContent);
     }

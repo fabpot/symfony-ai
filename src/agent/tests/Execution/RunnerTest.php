@@ -37,6 +37,7 @@ use Symfony\AI\Platform\Result\Stream\Delta\ToolCallComplete;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallStart;
 use Symfony\AI\Platform\Result\StreamResult;
 use Symfony\AI\Platform\Result\TextResult;
+use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCall;
 use Symfony\AI\Platform\Result\ToolCallResult;
@@ -460,14 +461,14 @@ final class RunnerTest extends TestCase
             ->willReturnCallback(static fn (ToolCall $toolCall): ToolResult => new ToolResult($toolCall, 'Test response'));
 
         $stream = new StreamResult((static function () use ($toolCall1, $toolCall2) {
-            yield new ThinkingStart();
+            yield new ThinkingStart(ThinkingContentType::OPAQUE);
             yield new ThinkingSignature('opaque_sig');
-            yield new ThinkingComplete('', 'opaque_sig');
+            yield new ThinkingComplete('', 'opaque_sig', ThinkingContentType::OPAQUE);
             yield new ToolCallStart($toolCall1->getId(), $toolCall1->getName());
-            yield new ThinkingStart();
-            yield new ThinkingDelta('A visible summary.');
+            yield new ThinkingStart(ThinkingContentType::SUMMARY);
+            yield new ThinkingDelta('A visible summary.', ThinkingContentType::SUMMARY);
             yield new ThinkingSignature('summary_sig');
-            yield new ThinkingComplete('A visible summary.', 'summary_sig');
+            yield new ThinkingComplete('A visible summary.', 'summary_sig', ThinkingContentType::SUMMARY);
             yield new ToolCallStart($toolCall2->getId(), $toolCall2->getName());
             yield new ToolCallComplete([$toolCall1, $toolCall2]);
         })());
@@ -495,10 +496,12 @@ final class RunnerTest extends TestCase
         $this->assertInstanceOf(Thinking::class, $content[0]);
         $this->assertSame('', $content[0]->getContent());
         $this->assertSame('opaque_sig', $content[0]->getSignature());
+        $this->assertSame(ThinkingContentType::OPAQUE, $content[0]->getContentType());
         $this->assertSame($toolCall1, $content[1]);
         $this->assertInstanceOf(Thinking::class, $content[2]);
         $this->assertSame('A visible summary.', $content[2]->getContent());
         $this->assertSame('summary_sig', $content[2]->getSignature());
+        $this->assertSame(ThinkingContentType::SUMMARY, $content[2]->getContentType());
         $this->assertSame($toolCall2, $content[3]);
     }
 

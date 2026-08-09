@@ -430,6 +430,8 @@ class ResultConverter implements ResultConverterInterface
         $thinkingBlocks = [];
         /** @var array<string, list<string>> $reasoningItemBlocks */
         $reasoningItemBlocks = [];
+        /** @var array<string, true> $readyThinkingBlocks */
+        $readyThinkingBlocks = [];
         /** @var array<string, ToolCall> $toolCalls */
         $toolCalls = [];
         /** @var array<string, true> $startedToolCalls */
@@ -491,6 +493,7 @@ class ResultConverter implements ResultConverterInterface
             }
 
             if (str_contains($type, 'output_text') && isset($event['delta'])) {
+                yield from $this->completeThinkingBlocks($thinkingBlocks, $readyThinkingBlocks);
                 yield new TextDelta($event['delta']);
             }
 
@@ -499,7 +502,7 @@ class ResultConverter implements ResultConverterInterface
             }
 
             if (\in_array($type, ['response.reasoning_text.done', 'response.reasoning.done'], true)) {
-                yield from $this->convertThinkingDoneEvent($event, 'content', ThinkingRepresentation::FULL, $thinkingBlocks, $reasoningItemBlocks);
+                yield from $this->convertThinkingDoneEvent($event, 'content', ThinkingRepresentation::FULL, $thinkingBlocks, $reasoningItemBlocks, $readyThinkingBlocks);
             }
 
             if ('response.reasoning_summary_text.delta' === $type && isset($event['delta'])) {
@@ -507,10 +510,11 @@ class ResultConverter implements ResultConverterInterface
             }
 
             if ('response.reasoning_summary_text.done' === $type) {
-                yield from $this->convertThinkingDoneEvent($event, 'summary', ThinkingRepresentation::SUMMARY, $thinkingBlocks, $reasoningItemBlocks);
+                yield from $this->convertThinkingDoneEvent($event, 'summary', ThinkingRepresentation::SUMMARY, $thinkingBlocks, $reasoningItemBlocks, $readyThinkingBlocks);
             }
 
             if ('response.output_item.added' === $type && \is_array($event['item'] ?? null) && 'function_call' === ($event['item']['type'] ?? null)) {
+                yield from $this->completeThinkingBlocks($thinkingBlocks, $readyThinkingBlocks);
                 $item = $event['item'];
                 $id = $item['call_id'] ?? $item['id'] ?? null;
                 if (\is_string($id) && '' !== $id && !isset($startedToolCalls[$id])) {
@@ -520,6 +524,7 @@ class ResultConverter implements ResultConverterInterface
             }
 
             if ('response.output_item.done' === $type && \is_array($event['item'] ?? null) && 'function_call' === ($event['item']['type'] ?? null)) {
+                yield from $this->completeThinkingBlocks($thinkingBlocks, $readyThinkingBlocks);
                 /** @var FunctionCall $item */
                 $item = $event['item'];
                 $toolCall = $this->convertFunctionCall($item);
@@ -534,7 +539,7 @@ class ResultConverter implements ResultConverterInterface
                 /** @var Thinking $item */
                 $item = $event['item'];
                 $itemId = $this->reasoningItemId($event, $item);
-                $recoveredBlockIds = [];
+                $recoveredBlockIds = $reasoningItemBlocks[$itemId] ?? [];
 
                 foreach ([
                     ['field' => 'content', 'representation' => ThinkingRepresentation::FULL],
@@ -561,7 +566,7 @@ class ResultConverter implements ResultConverterInterface
                             yield new ThinkingDelta($id, $content, $definition['representation']);
                         }
 
-                        if (!$thinkingBlocks[$id]['completed']) {
+                        if (!$thinkingBlocks[$id]['completed'] && !\in_array($id, $recoveredBlockIds, true)) {
                             $recoveredBlockIds[] = $id;
                         }
                     }
@@ -580,7 +585,9 @@ class ResultConverter implements ResultConverterInterface
                         'completed' => false,
                     ];
                     $this->rememberReasoningItemBlock($reasoningItemBlocks, $itemId, $stateBlockId);
-                    $recoveredBlockIds[] = $stateBlockId;
+                    if (!\in_array($stateBlockId, $recoveredBlockIds, true)) {
+                        $recoveredBlockIds[] = $stateBlockId;
+                    }
                     yield new ThinkingStart($stateBlockId, ThinkingRepresentation::OPAQUE);
                 }
 
@@ -592,6 +599,7 @@ class ResultConverter implements ResultConverterInterface
                 );
 
                 foreach ($recoveredBlockIds as $id) {
+                    unset($readyThinkingBlocks[$id]);
                     if ($thinkingBlocks[$id]['completed']) {
                         continue;
                     }
@@ -611,6 +619,7 @@ class ResultConverter implements ResultConverterInterface
             }
 
             $sawResponseCompleted = true;
+            yield from $this->completeThinkingBlocks($thinkingBlocks, $readyThinkingBlocks, true);
             [$toolCallResult] = $this->extractFunctionCalls($event['response'][self::KEY_OUTPUT] ?? []);
 
             if ($toolCallResult) {
@@ -658,8 +667,9 @@ class ResultConverter implements ResultConverterInterface
      * @param array<string, mixed>                                                                           $event
      * @param array<string, array{content: string, representation: ThinkingRepresentation, completed: bool}> $thinkingBlocks
      * @param array<string, list<string>>                                                                    $reasoningItemBlocks
+     * @param array<string, true>                                                                            $readyThinkingBlocks
      */
-    private function convertThinkingDoneEvent(array $event, string $field, ThinkingRepresentation $representation, array &$thinkingBlocks, array &$reasoningItemBlocks): \Generator
+    private function convertThinkingDoneEvent(array $event, string $field, ThinkingRepresentation $representation, array &$thinkingBlocks, array &$reasoningItemBlocks, array &$readyThinkingBlocks): \Generator
     {
         $itemId = $this->reasoningItemId($event);
         $id = $this->thinkingBlockId($itemId, $field, $this->thinkingBlockIndex($event, $field));
@@ -673,13 +683,33 @@ class ResultConverter implements ResultConverterInterface
                 yield new ThinkingDelta($id, $content, $representation);
             }
         } elseif ('' === $thinkingBlocks[$id]['content'] && '' !== $content) {
-            $thinkingBlocks[$id]['content'] = $content;
             yield new ThinkingDelta($id, $content, $representation);
         }
 
+        $thinkingBlocks[$id]['content'] = $content;
         if (!$thinkingBlocks[$id]['completed']) {
+            $readyThinkingBlocks[$id] = true;
+        }
+    }
+
+    /**
+     * @param array<string, array{content: string, representation: ThinkingRepresentation, completed: bool}> $thinkingBlocks
+     * @param array<string, true>                                                                            $readyThinkingBlocks
+     */
+    private function completeThinkingBlocks(array &$thinkingBlocks, array &$readyThinkingBlocks, bool $all = false): \Generator
+    {
+        foreach (array_keys($all ? $thinkingBlocks : $readyThinkingBlocks) as $id) {
+            unset($readyThinkingBlocks[$id]);
+            if ($thinkingBlocks[$id]['completed']) {
+                continue;
+            }
+
             $thinkingBlocks[$id]['completed'] = true;
-            yield new ThinkingComplete($id, $content, $representation);
+            yield new ThinkingComplete(
+                $id,
+                $thinkingBlocks[$id]['content'],
+                $thinkingBlocks[$id]['representation'],
+            );
         }
     }
 

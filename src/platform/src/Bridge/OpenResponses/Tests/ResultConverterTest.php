@@ -1655,6 +1655,57 @@ final class ResultConverterTest extends TestCase
         $this->assertInstanceOf(TextDelta::class, $chunks[4]);
     }
 
+    public function testStreamCompletesReasoningAfterReceivingProviderState()
+    {
+        $converter = new ResultConverter();
+
+        $httpResponse = $this->createStub(ResponseInterface::class);
+        $httpResponse->method('getStatusCode')->willReturn(200);
+
+        $reasoningItem = [
+            'type' => 'reasoning',
+            'id' => 'rs_1',
+            'summary' => [
+                ['type' => 'summary_text', 'text' => 'Reasoning about it.'],
+            ],
+            'encrypted_content' => 'gAAAAA-encrypted',
+        ];
+        $events = [
+            [
+                'type' => 'response.reasoning_summary_text.delta',
+                'item_id' => 'rs_1',
+                'summary_index' => 0,
+                'delta' => 'Reasoning',
+            ],
+            [
+                'type' => 'response.reasoning_summary_text.done',
+                'item_id' => 'rs_1',
+                'summary_index' => 0,
+                'text' => 'Reasoning about it.',
+            ],
+            [
+                'type' => 'response.output_item.done',
+                'item' => $reasoningItem,
+            ],
+            [
+                'type' => 'response.completed',
+                'response' => ['output' => []],
+            ],
+        ];
+
+        $streamResult = $converter->convert(new InMemoryRawResult([], $events, $httpResponse), ['stream' => true]);
+        $chunks = iterator_to_array($streamResult->getContent());
+
+        $this->assertCount(5, $chunks);
+        $this->assertInstanceOf(ThinkingStart::class, $chunks[0]);
+        $this->assertInstanceOf(ThinkingDelta::class, $chunks[1]);
+        $this->assertInstanceOf(ThinkingStateDelta::class, $chunks[2]);
+        $this->assertInstanceOf(ThinkingComplete::class, $chunks[3]);
+        $this->assertSame('Reasoning about it.', $chunks[3]->getThinking());
+        $this->assertSame($reasoningItem, json_decode($chunks[3]->getProviderState()?->getPayload() ?? '', true));
+        $this->assertInstanceOf(MetadataDelta::class, $chunks[4]);
+    }
+
     public function testStreamFramesOpaqueReasoningItems()
     {
         $converter = new ResultConverter();

@@ -26,8 +26,9 @@ use Symfony\AI\Platform\Message\MessageInterface;
 use Symfony\AI\Platform\Message\Role;
 use Symfony\AI\Platform\Message\ToolCallMessage;
 use Symfony\AI\Platform\Message\UserMessage;
-use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ToolCall;
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 use Symfony\Component\Serializer\Encoder\JsonEncoder;
 use Symfony\Component\Serializer\Normalizer\ArrayDenormalizer;
 use Symfony\Component\Serializer\Serializer;
@@ -227,14 +228,32 @@ final class MessageNormalizerTest extends TestCase
         ], [new JsonEncoder()]);
 
         $message = new AssistantMessage(
-            new Thinking('First thought.', 'sig_1', ThinkingContentType::SUMMARY),
+            new Thinking(
+                'First thought.',
+                ThinkingRepresentation::SUMMARY,
+                new ThinkingProviderState(ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE, 'sig_1'),
+            ),
             new Text('Intermediate text.'),
             new ToolCall('call-1', 'run', ['x' => 1]),
-            new Thinking('', 'sig_2', ThinkingContentType::OPAQUE),
+            new Thinking(
+                '',
+                ThinkingRepresentation::OPAQUE,
+                new ThinkingProviderState(ThinkingProviderState::FORMAT_OPEN_RESPONSES_REASONING, 'sig_2'),
+            ),
             new Text('Trailing text.'),
         );
 
         $payload = $serializer->normalize($message);
+        $this->assertSame([
+            'type' => Thinking::class,
+            'content' => 'First thought.',
+            'representation' => 'summary',
+            'providerState' => [
+                'format' => ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE,
+                'payload' => 'sig_1',
+            ],
+        ], $payload['parts'][0]);
+
         /** @var AssistantMessage $denormalized */
         $denormalized = $serializer->denormalize($payload, MessageInterface::class);
 
@@ -242,18 +261,41 @@ final class MessageNormalizerTest extends TestCase
         $this->assertCount(5, $parts);
         $this->assertInstanceOf(Thinking::class, $parts[0]);
         $this->assertSame('First thought.', $parts[0]->getContent());
-        $this->assertSame('sig_1', $parts[0]->getSignature());
-        $this->assertSame(ThinkingContentType::SUMMARY, $parts[0]->getContentType());
+        $this->assertSame(ThinkingRepresentation::SUMMARY, $parts[0]->getRepresentation());
+        $this->assertSame(ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE, $parts[0]->getProviderState()->getFormat());
+        $this->assertSame('sig_1', $parts[0]->getProviderState()->getPayload());
         $this->assertInstanceOf(Text::class, $parts[1]);
         $this->assertSame('Intermediate text.', $parts[1]->getText());
         $this->assertInstanceOf(ToolCall::class, $parts[2]);
         $this->assertSame('call-1', $parts[2]->getId());
         $this->assertInstanceOf(Thinking::class, $parts[3]);
         $this->assertSame('', $parts[3]->getContent());
-        $this->assertSame('sig_2', $parts[3]->getSignature());
-        $this->assertSame(ThinkingContentType::OPAQUE, $parts[3]->getContentType());
+        $this->assertSame(ThinkingRepresentation::OPAQUE, $parts[3]->getRepresentation());
+        $this->assertSame(ThinkingProviderState::FORMAT_OPEN_RESPONSES_REASONING, $parts[3]->getProviderState()->getFormat());
+        $this->assertSame('sig_2', $parts[3]->getProviderState()->getPayload());
         $this->assertInstanceOf(Text::class, $parts[4]);
         $this->assertSame('Trailing text.', $parts[4]->getText());
+    }
+
+    public function testItDenormalizesLegacyThinkingSignatureWithoutInferringRepresentation()
+    {
+        $normalizer = new MessageNormalizer();
+        $payload = $normalizer->normalize(new AssistantMessage(new Text('answer')));
+        $payload['parts'] = [[
+            'type' => Thinking::class,
+            'content' => 'legacy reasoning',
+            'signature' => 'sig_legacy',
+            'contentType' => 'summary',
+        ]];
+
+        /** @var AssistantMessage $denormalized */
+        $denormalized = $normalizer->denormalize($payload, MessageInterface::class);
+        $part = $denormalized->getContent()[0];
+
+        $this->assertInstanceOf(Thinking::class, $part);
+        $this->assertSame(ThinkingRepresentation::UNKNOWN, $part->getRepresentation());
+        $this->assertSame(ThinkingProviderState::FORMAT_UNKNOWN, $part->getProviderState()->getFormat());
+        $this->assertSame('sig_legacy', $part->getProviderState()->getPayload());
     }
 
     public function testItCanNormalizeAndDenormalizeToolCallMessage()

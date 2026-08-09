@@ -20,6 +20,7 @@ use Symfony\AI\Platform\Message\MessageBag;
 use Symfony\AI\Platform\Result\Stream\Delta\TextDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingDelta;
 use Symfony\AI\Platform\Result\StreamResult;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 
 final class ChatStreamListenerTest extends TestCase
 {
@@ -57,7 +58,7 @@ final class ChatStreamListenerTest extends TestCase
 
         $generator = (static function () {
             yield new TextDelta('Hello ');
-            yield new ThinkingDelta('thinking...');
+            yield new ThinkingDelta('thinking-1', 'thinking...', ThinkingRepresentation::UNKNOWN);
             yield new TextDelta('World');
         })();
 

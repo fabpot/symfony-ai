@@ -19,8 +19,9 @@ use Symfony\AI\Platform\Contract;
 use Symfony\AI\Platform\Message\AssistantMessage;
 use Symfony\AI\Platform\Message\Content\Text;
 use Symfony\AI\Platform\Message\Content\Thinking;
-use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ToolCall;
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 
 final class AssistantMessageNormalizerTest extends TestCase
 {
@@ -156,7 +157,7 @@ final class AssistantMessageNormalizerTest extends TestCase
 
         yield 'thinking with text' => [
             new AssistantMessage(
-                new Thinking('Let me reason about this...', 'sig_abc123'),
+                new Thinking('Let me reason about this...', ThinkingRepresentation::UNKNOWN, new ThinkingProviderState(ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE, 'sig_abc123')),
                 new Text('The answer is 42.'),
             ),
             [
@@ -170,7 +171,7 @@ final class AssistantMessageNormalizerTest extends TestCase
 
         yield 'thinking with text and tool calls' => [
             new AssistantMessage(
-                new Thinking('I need to look this up.', 'sig_xyz'),
+                new Thinking('I need to look this up.', ThinkingRepresentation::UNKNOWN, new ThinkingProviderState(ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE, 'sig_xyz')),
                 new Text('Let me search.'),
                 new ToolCall('id1', 'search', ['query' => 'symfony']),
             ),
@@ -192,7 +193,6 @@ final class AssistantMessageNormalizerTest extends TestCase
             [
                 'role' => 'assistant',
                 'content' => [
-                    ['type' => 'thinking', 'thinking' => 'Quick thought.'],
                     ['type' => 'text', 'text' => 'Done.'],
                 ],
             ],
@@ -200,7 +200,7 @@ final class AssistantMessageNormalizerTest extends TestCase
 
         yield 'thinking with tool calls but no text' => [
             new AssistantMessage(
-                new Thinking('I should read this file.', 'sig_123'),
+                new Thinking('I should read this file.', ThinkingRepresentation::UNKNOWN, new ThinkingProviderState(ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE, 'sig_123')),
                 new ToolCall('id1', 'read', ['path' => '/etc/hosts']),
             ),
             [
@@ -214,7 +214,7 @@ final class AssistantMessageNormalizerTest extends TestCase
 
         yield 'opaque thinking' => [
             new AssistantMessage(
-                new Thinking('', 'opaque_sig', ThinkingContentType::OPAQUE),
+                new Thinking('', ThinkingRepresentation::OPAQUE, new ThinkingProviderState(ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE, 'opaque_sig')),
                 new ToolCall('id1', 'read', ['path' => '/etc/hosts']),
             ),
             [
@@ -228,7 +228,7 @@ final class AssistantMessageNormalizerTest extends TestCase
 
         yield 'redacted thinking' => [
             new AssistantMessage(
-                new Thinking('', 'redacted_data', ThinkingContentType::REDACTED),
+                new Thinking('', ThinkingRepresentation::OPAQUE, new ThinkingProviderState(ThinkingProviderState::FORMAT_ANTHROPIC_REDACTED, 'redacted_data')),
                 new ToolCall('id1', 'read', ['path' => '/etc/hosts']),
             ),
             [

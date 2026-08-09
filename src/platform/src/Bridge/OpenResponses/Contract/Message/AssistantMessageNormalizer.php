@@ -18,6 +18,7 @@ use Symfony\AI\Platform\Message\Content\Text;
 use Symfony\AI\Platform\Message\Content\Thinking;
 use Symfony\AI\Platform\Model;
 use Symfony\AI\Platform\Result\ToolCall;
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
 use Symfony\Component\Serializer\Normalizer\NormalizerAwareInterface;
 use Symfony\Component\Serializer\Normalizer\NormalizerAwareTrait;
 
@@ -47,16 +48,16 @@ final class AssistantMessageNormalizer extends ModelContractNormalizer implement
             }
 
             if ($part instanceof Thinking) {
-                // With store=false, the signature carries the original reasoning output item
-                $signature = $part->getSignature();
-                if (null === $signature) {
+                // With store=false, provider state carries the original reasoning output item
+                $state = $part->getProviderState();
+                if (null === $state || ThinkingProviderState::FORMAT_OPEN_RESPONSES_REASONING !== $state->getFormat()) {
                     continue;
                 }
 
                 try {
-                    $item = json_decode($signature, true, flags: \JSON_THROW_ON_ERROR);
+                    $item = json_decode($state->getPayload(), true, flags: \JSON_THROW_ON_ERROR);
                 } catch (\JsonException) {
-                    // Signatures from other providers may be opaque strings
+                    // Invalid provider state cannot be replayed safely
                     continue;
                 }
 

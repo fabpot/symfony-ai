@@ -13,6 +13,7 @@ namespace Symfony\AI\Platform\Tests;
 
 use PHPUnit\Framework\TestCase;
 use Symfony\AI\Platform\Capability;
+use Symfony\AI\Platform\Contract;
 use Symfony\AI\Platform\Event\InvocationEvent;
 use Symfony\AI\Platform\Event\ResultConvertedEvent;
 use Symfony\AI\Platform\Event\ResultErrorEvent;
@@ -137,6 +138,53 @@ final class ProviderTest extends TestCase
         $result = $provider->invoke('gpt-4o', 'Hello');
 
         $this->assertInstanceOf(DeferredResult::class, $result);
+    }
+
+    public function testInvokePassesModelOnlyToConverterOptions()
+    {
+        $invocationOptions = [
+            'temperature' => 0.5,
+            Contract::CONTEXT_MODEL => 'provider-option',
+        ];
+        $model = new Model('gpt-4o', [Capability::INPUT_MESSAGES]);
+        $rawResult = $this->createStub(RawResultInterface::class);
+
+        $modelClient = $this->createStub(ModelClientInterface::class);
+        $modelClient->method('supports')->willReturn(true);
+        $modelClient->method('request')->willReturn($rawResult);
+
+        $resultConverter = $this->createMock(ResultConverterInterface::class);
+        $resultConverter->method('supports')->willReturn(true);
+        $resultConverter->expects($this->once())
+            ->method('convert')
+            ->with($rawResult, [
+                'temperature' => 0.5,
+                Contract::CONTEXT_MODEL => $model,
+            ])
+            ->willReturn(new TextResult('Hello'));
+
+        $dispatchedEvents = [];
+        $eventDispatcher = $this->createStub(EventDispatcherInterface::class);
+        $eventDispatcher->method('dispatch')->willReturnCallback(static function ($event) use (&$dispatchedEvents) {
+            $dispatchedEvents[] = $event;
+
+            return $event;
+        });
+
+        $provider = new Provider(
+            'openai',
+            [$modelClient],
+            [$resultConverter],
+            $this->createStub(ModelCatalogInterface::class),
+            eventDispatcher: $eventDispatcher,
+        );
+
+        $provider->invoke($model, 'Hello', $invocationOptions)->getResult();
+
+        $this->assertCount(3, $dispatchedEvents);
+        $this->assertSame($invocationOptions, $dispatchedEvents[0]->getOptions());
+        $this->assertSame($invocationOptions, $dispatchedEvents[1]->getOptions());
+        $this->assertSame($invocationOptions, $dispatchedEvents[2]->getOptions());
     }
 
     public function testInvokeThrowsWhenNoModelClientSupportsModel()

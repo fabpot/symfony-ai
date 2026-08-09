@@ -19,11 +19,12 @@ use Symfony\AI\Platform\Result\ObjectResult;
 use Symfony\AI\Platform\Result\ResultInterface;
 use Symfony\AI\Platform\Result\StreamResult;
 use Symfony\AI\Platform\Result\TextResult;
-use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCall;
 use Symfony\AI\Platform\Result\ToolCallResult;
 use Symfony\AI\Platform\Result\VectorResult;
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 use Symfony\AI\Platform\Vector\Vector;
 use Symfony\Component\Serializer\Normalizer\DenormalizerInterface;
 use Symfony\Component\Serializer\Normalizer\NormalizerAwareInterface;
@@ -68,8 +69,8 @@ final class ResultNormalizer implements NormalizerInterface, DenormalizerInterfa
                 ),
                 ThinkingResult::class => [
                     'content' => $data->getContent(),
-                    'signature' => $data->getSignature(),
-                    'contentType' => $data->getContentType()->value,
+                    'representation' => $data->getRepresentation()->value,
+                    'providerState' => self::normalizeThinkingProviderState($data->getProviderState()),
                 ],
                 ObjectResult::class => [
                     'type' => get_debug_type($data->getContent()),
@@ -112,8 +113,8 @@ final class ResultNormalizer implements NormalizerInterface, DenormalizerInterfa
             )),
             ThinkingResult::class => new ThinkingResult(
                 $data['payload']['content'],
-                $data['payload']['signature'],
-                ThinkingContentType::from($data['payload']['contentType'] ?? ThinkingContentType::FULL->value),
+                isset($data['payload']['representation']) ? ThinkingRepresentation::from($data['payload']['representation']) : ThinkingRepresentation::UNKNOWN,
+                self::denormalizeThinkingProviderState($data['payload']),
             ),
             ObjectResult::class => new ObjectResult('array' === $data['payload']['type'] ? $data['payload']['content'] : $this->objectNormalizer->denormalize($data['payload']['content'], $data['payload']['type'], $format, $context)),
             TextResult::class => new TextResult($data['payload']),
@@ -143,5 +144,39 @@ final class ResultNormalizer implements NormalizerInterface, DenormalizerInterfa
         return [
             ResultInterface::class => true,
         ];
+    }
+
+    /**
+     * @return array{format: string, payload: string}|null
+     */
+    private static function normalizeThinkingProviderState(?ThinkingProviderState $providerState): ?array
+    {
+        if (null === $providerState) {
+            return null;
+        }
+
+        return [
+            'format' => $providerState->getFormat(),
+            'payload' => $providerState->getPayload(),
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     */
+    private static function denormalizeThinkingProviderState(array $payload): ?ThinkingProviderState
+    {
+        if (isset($payload['providerState'])) {
+            return new ThinkingProviderState(
+                $payload['providerState']['format'],
+                $payload['providerState']['payload'],
+            );
+        }
+
+        if (isset($payload['signature']) && '' !== $payload['signature']) {
+            return new ThinkingProviderState(ThinkingProviderState::FORMAT_UNKNOWN, $payload['signature']);
+        }
+
+        return null;
     }
 }

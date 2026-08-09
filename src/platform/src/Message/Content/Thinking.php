@@ -11,20 +11,18 @@
 
 namespace Symfony\AI\Platform\Message\Content;
 
-use Symfony\AI\Platform\Result\ThinkingContentType;
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 
 /**
  * Represents a thinking/reasoning block emitted by an assistant.
- *
- * The optional signature is used by providers such as Anthropic to verify
- * thinking blocks when they are replayed on a subsequent turn.
  */
 final class Thinking implements ContentInterface
 {
     public function __construct(
         private readonly string $content,
-        private readonly ?string $signature = null,
-        private readonly ThinkingContentType $contentType = ThinkingContentType::FULL,
+        private readonly ThinkingRepresentation $representation = ThinkingRepresentation::UNKNOWN,
+        private readonly ?ThinkingProviderState $providerState = null,
     ) {
     }
 
@@ -33,13 +31,13 @@ final class Thinking implements ContentInterface
         return $this->content;
     }
 
-    public function getSignature(): ?string
+    public function getRepresentation(): ThinkingRepresentation
     {
-        return $this->signature;
+        return $this->representation;
     }
 
-    public function getContentType(): ThinkingContentType
+    public function getProviderState(): ?ThinkingProviderState
     {
-        return $this->contentType;
+        return $this->providerState;
     }
 }

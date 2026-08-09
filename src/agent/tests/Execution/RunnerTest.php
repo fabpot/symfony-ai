@@ -31,17 +31,18 @@ use Symfony\AI\Platform\Result\ResultInterface;
 use Symfony\AI\Platform\Result\Stream\Delta\TextDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingComplete;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingDelta;
-use Symfony\AI\Platform\Result\Stream\Delta\ThinkingSignature;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingStart;
+use Symfony\AI\Platform\Result\Stream\Delta\ThinkingStateDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallComplete;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallStart;
 use Symfony\AI\Platform\Result\StreamResult;
 use Symfony\AI\Platform\Result\TextResult;
-use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCall;
 use Symfony\AI\Platform\Result\ToolCallResult;
 use Symfony\AI\Platform\Test\InMemoryPlatform;
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 use Symfony\AI\Platform\TokenUsage\TokenUsage;
 use Symfony\AI\Platform\TokenUsage\TokenUsageAggregation;
 use Symfony\AI\Platform\Tool\ExecutionReference;
@@ -152,8 +153,9 @@ final class RunnerTest extends TestCase
             ->method('execute')
             ->willReturn(new ToolResult($toolCall, 'Test response'));
 
+        $providerState = new ThinkingProviderState(ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE, 'sig_123');
         $result = new MultiPartResult([
-            new ThinkingResult('I should use a tool.', 'sig_123'),
+            new ThinkingResult('I should use a tool.', ThinkingRepresentation::FULL, $providerState),
             new ToolCallResult([$toolCall]),
         ]);
         $agent = $this->createStub(AgentInterface::class);
@@ -169,7 +171,8 @@ final class RunnerTest extends TestCase
         $this->assertCount(2, $content);
         $this->assertInstanceOf(Thinking::class, $content[0]);
         $this->assertSame('I should use a tool.', $content[0]->getContent());
-        $this->assertSame('sig_123', $content[0]->getSignature());
+        $this->assertSame(ThinkingRepresentation::FULL, $content[0]->getRepresentation());
+        $this->assertSame($providerState, $content[0]->getProviderState());
         $this->assertSame($toolCall, $content[1]);
     }
 
@@ -450,26 +453,32 @@ final class RunnerTest extends TestCase
         $this->assertSame('Let me check that.', $assistantMessages[0]->asText());
     }
 
-    public function testStreamedThinkingIsPreservedInAssistantToolCallMessage()
+    public function testStreamedThinkingAndProviderStateArePreservedInExactAssistantResponseOrder()
     {
         $toolCall1 = new ToolCall('call_1', 'tool_1');
         $toolCall2 = new ToolCall('call_2', 'tool_2');
+        $redactedState = new ThinkingProviderState(ThinkingProviderState::FORMAT_ANTHROPIC_REDACTED, 'redacted_data');
         $toolbox = $this->createMock(ToolboxInterface::class);
         $toolbox
             ->expects($this->exactly(2))
             ->method('execute')
             ->willReturnCallback(static fn (ToolCall $toolCall): ToolResult => new ToolResult($toolCall, 'Test response'));
 
-        $stream = new StreamResult((static function () use ($toolCall1, $toolCall2) {
-            yield new ThinkingStart(ThinkingContentType::OPAQUE);
-            yield new ThinkingSignature('opaque_sig');
-            yield new ThinkingComplete('', 'opaque_sig', ThinkingContentType::OPAQUE);
+        $stream = new StreamResult((static function () use ($redactedState, $toolCall1, $toolCall2) {
+            yield new ThinkingStart('opaque', ThinkingRepresentation::OPAQUE);
+            yield new ThinkingStateDelta('opaque', ThinkingProviderState::FORMAT_OPEN_RESPONSES_REASONING, 'opaque_', ThinkingRepresentation::OPAQUE);
             yield new ToolCallStart($toolCall1->getId(), $toolCall1->getName());
-            yield new ThinkingStart(ThinkingContentType::SUMMARY);
-            yield new ThinkingDelta('A visible summary.', ThinkingContentType::SUMMARY);
-            yield new ThinkingSignature('summary_sig');
-            yield new ThinkingComplete('A visible summary.', 'summary_sig', ThinkingContentType::SUMMARY);
+            yield new ThinkingStart('summary', ThinkingRepresentation::SUMMARY);
+            yield new ThinkingDelta('summary', 'A visible ', ThinkingRepresentation::SUMMARY);
             yield new ToolCallStart($toolCall2->getId(), $toolCall2->getName());
+            yield new ThinkingStateDelta('opaque', ThinkingProviderState::FORMAT_OPEN_RESPONSES_REASONING, 'state', ThinkingRepresentation::OPAQUE);
+            yield new ThinkingDelta('summary', 'summary.', ThinkingRepresentation::SUMMARY);
+            yield new ThinkingStateDelta('summary', ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE, 'summary_', ThinkingRepresentation::SUMMARY);
+            yield new TextDelta('');
+            yield new ThinkingStateDelta('summary', ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE, 'state', ThinkingRepresentation::SUMMARY);
+            yield new ThinkingComplete('opaque', '', ThinkingRepresentation::OPAQUE);
+            yield new ThinkingComplete('summary', 'A visible summary.', ThinkingRepresentation::SUMMARY);
+            yield new ThinkingComplete('redacted', '', ThinkingRepresentation::OPAQUE, $redactedState);
             yield new ToolCallComplete([$toolCall1, $toolCall2]);
         })());
 
@@ -492,17 +501,28 @@ final class RunnerTest extends TestCase
         $assistantMessage = $capturedMessages->getMessages()[0];
         $this->assertInstanceOf(AssistantMessage::class, $assistantMessage);
         $content = $assistantMessage->getContent();
-        $this->assertCount(4, $content);
+        $this->assertCount(5, $content);
+
         $this->assertInstanceOf(Thinking::class, $content[0]);
         $this->assertSame('', $content[0]->getContent());
-        $this->assertSame('opaque_sig', $content[0]->getSignature());
-        $this->assertSame(ThinkingContentType::OPAQUE, $content[0]->getContentType());
+        $this->assertSame(ThinkingRepresentation::OPAQUE, $content[0]->getRepresentation());
+        $this->assertSame(ThinkingProviderState::FORMAT_OPEN_RESPONSES_REASONING, $content[0]->getProviderState()->getFormat());
+        $this->assertSame('opaque_state', $content[0]->getProviderState()->getPayload());
+
         $this->assertSame($toolCall1, $content[1]);
+
         $this->assertInstanceOf(Thinking::class, $content[2]);
         $this->assertSame('A visible summary.', $content[2]->getContent());
-        $this->assertSame('summary_sig', $content[2]->getSignature());
-        $this->assertSame(ThinkingContentType::SUMMARY, $content[2]->getContentType());
+        $this->assertSame(ThinkingRepresentation::SUMMARY, $content[2]->getRepresentation());
+        $this->assertSame(ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE, $content[2]->getProviderState()->getFormat());
+        $this->assertSame('summary_state', $content[2]->getProviderState()->getPayload());
+
         $this->assertSame($toolCall2, $content[3]);
+
+        $this->assertInstanceOf(Thinking::class, $content[4]);
+        $this->assertSame('', $content[4]->getContent());
+        $this->assertSame(ThinkingRepresentation::OPAQUE, $content[4]->getRepresentation());
+        $this->assertSame($redactedState, $content[4]->getProviderState());
     }
 
     public function testUsageMetadataGetsPropagatedInStreaming()

@@ -11,6 +11,8 @@
 
 namespace Symfony\AI\Platform\Bridge\Anthropic;
 
+use Symfony\AI\Platform\Capability;
+use Symfony\AI\Platform\Contract;
 use Symfony\AI\Platform\Exception\AuthenticationException;
 use Symfony\AI\Platform\Exception\BadRequestException;
 use Symfony\AI\Platform\Exception\ExceedContextSizeException;
@@ -32,18 +34,19 @@ use Symfony\AI\Platform\Result\Stream\Delta\MetadataDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\TextDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingComplete;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingDelta;
-use Symfony\AI\Platform\Result\Stream\Delta\ThinkingSignature;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingStart;
+use Symfony\AI\Platform\Result\Stream\Delta\ThinkingStateDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallComplete;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallStart;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolInputDelta;
 use Symfony\AI\Platform\Result\StreamResult;
 use Symfony\AI\Platform\Result\TextResult;
-use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCall;
 use Symfony\AI\Platform\Result\ToolCallResult;
 use Symfony\AI\Platform\ResultConverterInterface;
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 
 /**
  * @author Christopher Hertel <mail@christopher-hertel.de>
@@ -93,7 +96,7 @@ class ResultConverter implements ResultConverterInterface
                 throw new RuntimeException(\sprintf('Unexpected response code %d: "%s"', $code, $response->getContent(false)));
             }
 
-            return new StreamResult($this->convertStream($result));
+            return new StreamResult($this->convertStream($result, $this->thinkingRepresentation($options)));
         }
 
         $data = $result->getData();
@@ -142,13 +145,19 @@ class ResultConverter implements ResultConverterInterface
                 $results[] = new CodeExecutionResult(true, null, $content['tool_use_id']);
             } elseif ('thinking' === $content['type']) {
                 $thinking = $content['thinking'] ?? '';
+                $signature = $content['signature'] ?? null;
                 $results[] = new ThinkingResult(
                     $thinking,
-                    $content['signature'] ?? null,
-                    '' === $thinking ? ThinkingContentType::OPAQUE : ThinkingContentType::SUMMARY,
+                    '' === $thinking ? ThinkingRepresentation::OPAQUE : $this->thinkingRepresentation($options),
+                    \is_string($signature) && '' !== $signature ? new ThinkingProviderState(ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE, $signature) : null,
                 );
             } elseif ('redacted_thinking' === $content['type']) {
-                $results[] = new ThinkingResult('', $content['data'] ?? null, ThinkingContentType::REDACTED);
+                $payload = $content['data'] ?? null;
+                $results[] = new ThinkingResult(
+                    '',
+                    ThinkingRepresentation::OPAQUE,
+                    \is_string($payload) && '' !== $payload ? new ThinkingProviderState(ThinkingProviderState::FORMAT_ANTHROPIC_REDACTED, $payload) : null,
+                );
             }
         }
 
@@ -167,14 +176,15 @@ class ResultConverter implements ResultConverterInterface
         return new TokenUsageExtractor();
     }
 
-    private function convertStream(RawResultInterface $result): \Generator
+    private function convertStream(RawResultInterface $result, ThinkingRepresentation $readableRepresentation): \Generator
     {
         $toolCalls = [];
         $currentToolCall = null;
         $currentToolCallJson = '';
         $currentThinking = null;
-        $currentThinkingSignature = null;
-        $currentThinkingContentType = null;
+        $currentThinkingState = null;
+        $currentThinkingRepresentation = null;
+        $currentThinkingId = null;
         $inMessage = false;
         $stopReason = null;
         $outputTokens = null;
@@ -232,42 +242,61 @@ class ResultConverter implements ResultConverterInterface
             }
 
             if ('content_block_start' === $type && 'thinking' === ($data['content_block']['type'] ?? null)) {
-                $currentThinking = '';
-                $currentThinkingSignature = null;
-                $currentThinkingContentType = null;
+                $currentThinking = \is_string($data['content_block']['thinking'] ?? null) ? $data['content_block']['thinking'] : '';
+                $signature = $data['content_block']['signature'] ?? null;
+                $currentThinkingState = \is_string($signature) && '' !== $signature ? new ThinkingProviderState(ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE, $signature) : null;
+                $currentThinkingRepresentation = '' !== $currentThinking ? $readableRepresentation : (null !== $currentThinkingState ? ThinkingRepresentation::OPAQUE : null);
+                $currentThinkingId = 'anthropic-thinking-'.($data['index'] ?? 0);
+
+                if (null !== $currentThinkingRepresentation) {
+                    yield new ThinkingStart($currentThinkingId, $currentThinkingRepresentation);
+                    if ('' !== $currentThinking) {
+                        yield new ThinkingDelta($currentThinkingId, $currentThinking, $currentThinkingRepresentation);
+                    }
+                    if (null !== $currentThinkingState) {
+                        yield new ThinkingStateDelta($currentThinkingId, $currentThinkingState->getFormat(), $currentThinkingState->getPayload(), $currentThinkingRepresentation);
+                    }
+                }
                 continue;
             }
 
             if ('content_block_start' === $type && 'redacted_thinking' === ($data['content_block']['type'] ?? null)) {
                 $currentThinking = '';
-                $currentThinkingSignature = $data['content_block']['data'] ?? null;
-                $currentThinkingContentType = ThinkingContentType::REDACTED;
-                yield new ThinkingStart($currentThinkingContentType);
-                if (null !== $currentThinkingSignature) {
-                    yield new ThinkingSignature($currentThinkingSignature);
+                $payload = $data['content_block']['data'] ?? null;
+                $currentThinkingState = \is_string($payload) && '' !== $payload ? new ThinkingProviderState(ThinkingProviderState::FORMAT_ANTHROPIC_REDACTED, $payload) : null;
+                $currentThinkingRepresentation = ThinkingRepresentation::OPAQUE;
+                $currentThinkingId = 'anthropic-thinking-'.($data['index'] ?? 0);
+                yield new ThinkingStart($currentThinkingId, $currentThinkingRepresentation);
+                if (null !== $currentThinkingState) {
+                    yield new ThinkingStateDelta($currentThinkingId, $currentThinkingState->getFormat(), $currentThinkingState->getPayload(), $currentThinkingRepresentation);
                 }
                 continue;
             }
 
             if ('content_block_delta' === $type && 'thinking_delta' === ($data['delta']['type'] ?? null)) {
-                if (null === $currentThinkingContentType) {
-                    $currentThinkingContentType = ThinkingContentType::SUMMARY;
-                    yield new ThinkingStart($currentThinkingContentType);
+                $currentThinkingId ??= 'anthropic-thinking-'.($data['index'] ?? 0);
+                if (null === $currentThinkingRepresentation) {
+                    $currentThinkingRepresentation = $readableRepresentation;
+                    yield new ThinkingStart($currentThinkingId, $currentThinkingRepresentation);
                 }
                 $thinking = $data['delta']['thinking'] ?? '';
                 $currentThinking = ($currentThinking ?? '').$thinking;
-                yield new ThinkingDelta($thinking, $currentThinkingContentType);
+                yield new ThinkingDelta($currentThinkingId, $thinking, $currentThinkingRepresentation);
                 continue;
             }
 
             if ('content_block_delta' === $type && 'signature_delta' === ($data['delta']['type'] ?? null)) {
-                if (null === $currentThinkingContentType) {
-                    $currentThinkingContentType = ThinkingContentType::OPAQUE;
-                    yield new ThinkingStart($currentThinkingContentType);
+                $currentThinkingId ??= 'anthropic-thinking-'.($data['index'] ?? 0);
+                if (null === $currentThinkingRepresentation) {
+                    $currentThinkingRepresentation = ThinkingRepresentation::OPAQUE;
+                    yield new ThinkingStart($currentThinkingId, $currentThinkingRepresentation);
                 }
                 $signature = $data['delta']['signature'] ?? '';
-                $currentThinkingSignature = ($currentThinkingSignature ?? '').$signature;
-                yield new ThinkingSignature($signature);
+                if ('' !== $signature) {
+                    $payload = ($currentThinkingState?->getPayload() ?? '').$signature;
+                    $currentThinkingState = new ThinkingProviderState(ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE, $payload);
+                    yield new ThinkingStateDelta($currentThinkingId, ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE, $signature, $currentThinkingRepresentation);
+                }
                 continue;
             }
 
@@ -300,11 +329,12 @@ class ResultConverter implements ResultConverterInterface
 
             // Handle content block stop - finalize current thinking or tool call
             if ('content_block_stop' === $type) {
-                if (null !== $currentThinkingContentType) {
-                    yield new ThinkingComplete($currentThinking, $currentThinkingSignature, $currentThinkingContentType);
+                if (null !== $currentThinkingRepresentation && null !== $currentThinkingId) {
+                    yield new ThinkingComplete($currentThinkingId, $currentThinking ?? '', $currentThinkingRepresentation, $currentThinkingState);
                     $currentThinking = null;
-                    $currentThinkingSignature = null;
-                    $currentThinkingContentType = null;
+                    $currentThinkingState = null;
+                    $currentThinkingRepresentation = null;
+                    $currentThinkingId = null;
                     continue;
                 }
 
@@ -356,5 +386,21 @@ class ResultConverter implements ResultConverterInterface
         if (null !== $stopReason) {
             yield new MetadataDelta('finish_reason', FinishReasonMapper::map($stopReason));
         }
+    }
+
+    /**
+     * @param array<string, mixed> $options
+     */
+    private function thinkingRepresentation(array $options): ThinkingRepresentation
+    {
+        $model = $options[Contract::CONTEXT_MODEL] ?? null;
+        if ($model instanceof Model && $model->supports(Capability::OUTPUT_THINKING_FULL)) {
+            return ThinkingRepresentation::FULL;
+        }
+        if ($model instanceof Model && $model->supports(Capability::OUTPUT_THINKING_SUMMARY)) {
+            return ThinkingRepresentation::SUMMARY;
+        }
+
+        return ThinkingRepresentation::UNKNOWN;
     }
 }

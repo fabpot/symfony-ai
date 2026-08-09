@@ -19,8 +19,8 @@ use Symfony\AI\Platform\Message\Content\ExecutableCode;
 use Symfony\AI\Platform\Message\Content\Text;
 use Symfony\AI\Platform\Message\Content\Thinking;
 use Symfony\AI\Platform\Model;
-use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ToolCall;
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
 
 /**
  * @author Christopher Hertel <mail@christopher-hertel.de>
@@ -68,22 +68,28 @@ final class AssistantMessageNormalizer extends ModelContractNormalizer
         $executedAsBash = [];
         foreach ($parts as $part) {
             if ($part instanceof Thinking) {
-                if (ThinkingContentType::REDACTED === $part->getContentType()) {
+                $state = $part->getProviderState();
+                if (null === $state) {
+                    continue;
+                }
+
+                if (ThinkingProviderState::FORMAT_ANTHROPIC_REDACTED === $state->getFormat()) {
                     $blocks[] = [
                         'type' => 'redacted_thinking',
-                        'data' => $part->getSignature() ?? '',
+                        'data' => $state->getPayload(),
                     ];
                     continue;
                 }
 
-                $block = [
+                if (ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE !== $state->getFormat()) {
+                    continue;
+                }
+
+                $blocks[] = [
                     'type' => 'thinking',
                     'thinking' => $part->getContent(),
+                    'signature' => $state->getPayload(),
                 ];
-                if (null !== $part->getSignature()) {
-                    $block['signature'] = $part->getSignature();
-                }
-                $blocks[] = $block;
                 continue;
             }
 

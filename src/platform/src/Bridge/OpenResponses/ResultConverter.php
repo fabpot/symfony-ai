@@ -39,17 +39,19 @@ use Symfony\AI\Platform\Result\Stream\Delta\MetadataDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\TextDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingComplete;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingDelta;
-use Symfony\AI\Platform\Result\Stream\Delta\ThinkingSignature;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingStart;
+use Symfony\AI\Platform\Result\Stream\Delta\ThinkingStateDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallComplete;
+use Symfony\AI\Platform\Result\Stream\Delta\ToolCallStart;
 use Symfony\AI\Platform\Result\StreamResult;
 use Symfony\AI\Platform\Result\TextResult;
-use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCall;
 use Symfony\AI\Platform\Result\ToolCallResult;
 use Symfony\AI\Platform\Result\WebSearchResult;
 use Symfony\AI\Platform\ResultConverterInterface;
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 use Symfony\Contracts\HttpClient\ResponseInterface;
 
 /**
@@ -59,7 +61,7 @@ use Symfony\Contracts\HttpClient\ResponseInterface;
  * @phpstan-type OutputText array{type: 'output_text', text: string}
  * @phpstan-type Refusal array{type: 'refusal', refusal: string}
  * @phpstan-type FunctionCall array{id?: string|null, arguments: string, call_id?: string|null, name: string, type: 'function_call'}
- * @phpstan-type Thinking array{summary: list<array{type: string, text?: string}>, id: string, encrypted_content?: string|null}
+ * @phpstan-type Thinking array{type: 'reasoning', summary?: list<array{type: string, text?: string}>, content?: list<array{type: string, text?: string}>, id?: string, encrypted_content?: string|null}
  * @phpstan-type Error array{code?: string|null, type?: string|null, param?: string|null, message?: string|null}
  * @phpstan-type WebSearchCall array{type: 'web_search_call', id?: string, status?: string, action?: array{type?: string, query?: string, queries?: list<string>}}
  * @phpstan-type FileSearchCall array{type: 'file_search_call', id?: string, status?: string, queries?: list<string>, results?: list<array<string, mixed>>|null}
@@ -224,13 +226,7 @@ class ResultConverter implements ResultConverterInterface
      */
     private function containsContent(array $results): bool
     {
-        foreach ($results as $result) {
-            if (!$result instanceof ThinkingResult || null !== $result->getContent()) {
-                return true;
-            }
-        }
-
-        return false;
+        return [] !== $results;
     }
 
     /**
@@ -240,16 +236,11 @@ class ResultConverter implements ResultConverterInterface
      */
     private function convertOutputArray(array $output): array
     {
-        [$toolCallResult, $output] = $this->extractFunctionCalls($output);
-
         $results = [];
         foreach ($output as $item) {
             foreach ($this->processOutputItem($item) as $result) {
                 $results[] = $result;
             }
-        }
-        if ($toolCallResult) {
-            $results[] = $toolCallResult;
         }
 
         return $results;
@@ -272,6 +263,7 @@ class ResultConverter implements ResultConverterInterface
         return match ($type) {
             'message' => $this->convertOutputMessage($item),
             'reasoning' => $this->convertReasoning($item),
+            'function_call' => [new ToolCallResult([$this->convertFunctionCall($item)])],
             'web_search_call' => $this->convertWebSearchCall($item),
             'file_search_call' => $this->convertFileSearchCall($item),
             'code_interpreter_call' => $this->convertCodeInterpreterCall($item),
@@ -434,9 +426,14 @@ class ResultConverter implements ResultConverterInterface
 
     private function convertStream(RawResultInterface|RawHttpResult $result): \Generator
     {
-        $currentThinking = null;
+        /** @var array<string, array{content: string, representation: ThinkingRepresentation, completed: bool}> $thinkingBlocks */
+        $thinkingBlocks = [];
+        /** @var array<string, list<string>> $reasoningItemBlocks */
+        $reasoningItemBlocks = [];
         /** @var array<string, ToolCall> $toolCalls */
         $toolCalls = [];
+        /** @var array<string, true> $startedToolCalls */
+        $startedToolCalls = [];
         $sawResponseEvent = false;
         $sawResponseCompleted = false;
         $sawToolCallComplete = false;
@@ -497,47 +494,115 @@ class ResultConverter implements ResultConverterInterface
                 yield new TextDelta($event['delta']);
             }
 
+            if (\in_array($type, ['response.reasoning_text.delta', 'response.reasoning.delta'], true) && isset($event['delta'])) {
+                yield from $this->convertThinkingDeltaEvent($event, 'content', ThinkingRepresentation::FULL, $thinkingBlocks, $reasoningItemBlocks);
+            }
+
+            if (\in_array($type, ['response.reasoning_text.done', 'response.reasoning.done'], true)) {
+                yield from $this->convertThinkingDoneEvent($event, 'content', ThinkingRepresentation::FULL, $thinkingBlocks, $reasoningItemBlocks);
+            }
+
             if ('response.reasoning_summary_text.delta' === $type && isset($event['delta'])) {
-                if (null === $currentThinking) {
-                    $currentThinking = '';
-                    yield new ThinkingStart(ThinkingContentType::SUMMARY);
-                }
-                $currentThinking .= $event['delta'];
-                yield new ThinkingDelta($event['delta'], ThinkingContentType::SUMMARY);
+                yield from $this->convertThinkingDeltaEvent($event, 'summary', ThinkingRepresentation::SUMMARY, $thinkingBlocks, $reasoningItemBlocks);
             }
 
             if ('response.reasoning_summary_text.done' === $type) {
-                yield new ThinkingComplete($currentThinking ?? '', contentType: ThinkingContentType::SUMMARY);
-                $currentThinking = null;
+                yield from $this->convertThinkingDoneEvent($event, 'summary', ThinkingRepresentation::SUMMARY, $thinkingBlocks, $reasoningItemBlocks);
+            }
+
+            if ('response.output_item.added' === $type && \is_array($event['item'] ?? null) && 'function_call' === ($event['item']['type'] ?? null)) {
+                $item = $event['item'];
+                $id = $item['call_id'] ?? $item['id'] ?? null;
+                if (\is_string($id) && '' !== $id && !isset($startedToolCalls[$id])) {
+                    $startedToolCalls[$id] = true;
+                    yield new ToolCallStart($id, $item['name'] ?? '');
+                }
             }
 
             if ('response.output_item.done' === $type && \is_array($event['item'] ?? null) && 'function_call' === ($event['item']['type'] ?? null)) {
                 /** @var FunctionCall $item */
                 $item = $event['item'];
                 $toolCall = $this->convertFunctionCall($item);
+                if (!isset($startedToolCalls[$toolCall->getId()])) {
+                    $startedToolCalls[$toolCall->getId()] = true;
+                    yield new ToolCallStart($toolCall->getId(), $toolCall->getName());
+                }
                 $toolCalls[$toolCall->getId()] = $toolCall;
             }
 
-            // The full reasoning item (including encrypted_content when requested
-            // via include: ["reasoning.encrypted_content"]) is emitted as the
-            // thinking signature so that requests using "store" => false can
-            // replay it on subsequent turns.
             if ('response.output_item.done' === $type && \is_array($event['item'] ?? null) && 'reasoning' === ($event['item']['type'] ?? null)) {
-                $signature = json_encode($event['item'], \JSON_THROW_ON_ERROR);
-                $hasSummary = false;
-                foreach ($event['item']['summary'] ?? [] as $summary) {
-                    if ('' !== ($summary['text'] ?? '')) {
-                        $hasSummary = true;
-                        break;
+                /** @var Thinking $item */
+                $item = $event['item'];
+                $itemId = $this->reasoningItemId($event, $item);
+                $recoveredBlockIds = [];
+
+                foreach ([
+                    ['field' => 'content', 'representation' => ThinkingRepresentation::FULL],
+                    ['field' => 'summary', 'representation' => ThinkingRepresentation::SUMMARY],
+                ] as $definition) {
+                    foreach ($item[$definition['field']] ?? [] as $index => $entry) {
+                        $content = $entry['text'] ?? '';
+                        if ('' === $content) {
+                            continue;
+                        }
+
+                        $id = $this->thinkingBlockId($itemId, $definition['field'], $index);
+                        $this->rememberReasoningItemBlock($reasoningItemBlocks, $itemId, $id);
+                        if (!isset($thinkingBlocks[$id])) {
+                            $thinkingBlocks[$id] = [
+                                'content' => $content,
+                                'representation' => $definition['representation'],
+                                'completed' => false,
+                            ];
+                            yield new ThinkingStart($id, $definition['representation']);
+                            yield new ThinkingDelta($id, $content, $definition['representation']);
+                        } elseif ('' === $thinkingBlocks[$id]['content']) {
+                            $thinkingBlocks[$id]['content'] = $content;
+                            yield new ThinkingDelta($id, $content, $definition['representation']);
+                        }
+
+                        if (!$thinkingBlocks[$id]['completed']) {
+                            $recoveredBlockIds[] = $id;
+                        }
                     }
                 }
 
-                if (!$hasSummary) {
-                    yield new ThinkingStart(ThinkingContentType::OPAQUE);
+                $state = new ThinkingProviderState(
+                    ThinkingProviderState::FORMAT_OPEN_RESPONSES_REASONING,
+                    json_encode($item, \JSON_THROW_ON_ERROR),
+                );
+                $stateBlockId = $reasoningItemBlocks[$itemId][0] ?? $this->thinkingBlockId($itemId, 'opaque', 0);
+
+                if (!isset($thinkingBlocks[$stateBlockId])) {
+                    $thinkingBlocks[$stateBlockId] = [
+                        'content' => '',
+                        'representation' => ThinkingRepresentation::OPAQUE,
+                        'completed' => false,
+                    ];
+                    $this->rememberReasoningItemBlock($reasoningItemBlocks, $itemId, $stateBlockId);
+                    $recoveredBlockIds[] = $stateBlockId;
+                    yield new ThinkingStart($stateBlockId, ThinkingRepresentation::OPAQUE);
                 }
-                yield new ThinkingSignature($signature);
-                if (!$hasSummary) {
-                    yield new ThinkingComplete('', $signature, ThinkingContentType::OPAQUE);
+
+                yield new ThinkingStateDelta(
+                    $stateBlockId,
+                    $state->getFormat(),
+                    $state->getPayload(),
+                    $thinkingBlocks[$stateBlockId]['representation'],
+                );
+
+                foreach ($recoveredBlockIds as $id) {
+                    if ($thinkingBlocks[$id]['completed']) {
+                        continue;
+                    }
+
+                    $thinkingBlocks[$id]['completed'] = true;
+                    yield new ThinkingComplete(
+                        $id,
+                        $thinkingBlocks[$id]['content'],
+                        $thinkingBlocks[$id]['representation'],
+                        $stateBlockId === $id ? $state : null,
+                    );
                 }
             }
 
@@ -565,6 +630,96 @@ class ResultConverter implements ResultConverterInterface
         // response.failed throw above. Only the tool-call case needs to be told apart from a plain stop.
         if ($sawResponseCompleted) {
             yield new MetadataDelta('finish_reason', FinishReasonMapper::map('completed', $sawToolCallComplete));
+        }
+    }
+
+    /**
+     * @param array<string, mixed>                                                                           $event
+     * @param array<string, array{content: string, representation: ThinkingRepresentation, completed: bool}> $thinkingBlocks
+     * @param array<string, list<string>>                                                                    $reasoningItemBlocks
+     */
+    private function convertThinkingDeltaEvent(array $event, string $field, ThinkingRepresentation $representation, array &$thinkingBlocks, array &$reasoningItemBlocks): \Generator
+    {
+        $itemId = $this->reasoningItemId($event);
+        $id = $this->thinkingBlockId($itemId, $field, $this->thinkingBlockIndex($event, $field));
+        $this->rememberReasoningItemBlock($reasoningItemBlocks, $itemId, $id);
+
+        if (!isset($thinkingBlocks[$id])) {
+            $thinkingBlocks[$id] = ['content' => '', 'representation' => $representation, 'completed' => false];
+            yield new ThinkingStart($id, $representation);
+        }
+
+        $delta = $event['delta'];
+        $thinkingBlocks[$id]['content'] .= $delta;
+        yield new ThinkingDelta($id, $delta, $representation);
+    }
+
+    /**
+     * @param array<string, mixed>                                                                           $event
+     * @param array<string, array{content: string, representation: ThinkingRepresentation, completed: bool}> $thinkingBlocks
+     * @param array<string, list<string>>                                                                    $reasoningItemBlocks
+     */
+    private function convertThinkingDoneEvent(array $event, string $field, ThinkingRepresentation $representation, array &$thinkingBlocks, array &$reasoningItemBlocks): \Generator
+    {
+        $itemId = $this->reasoningItemId($event);
+        $id = $this->thinkingBlockId($itemId, $field, $this->thinkingBlockIndex($event, $field));
+        $this->rememberReasoningItemBlock($reasoningItemBlocks, $itemId, $id);
+        $content = \is_string($event['text'] ?? null) ? $event['text'] : ($thinkingBlocks[$id]['content'] ?? '');
+
+        if (!isset($thinkingBlocks[$id])) {
+            $thinkingBlocks[$id] = ['content' => $content, 'representation' => $representation, 'completed' => false];
+            yield new ThinkingStart($id, $representation);
+            if ('' !== $content) {
+                yield new ThinkingDelta($id, $content, $representation);
+            }
+        } elseif ('' === $thinkingBlocks[$id]['content'] && '' !== $content) {
+            $thinkingBlocks[$id]['content'] = $content;
+            yield new ThinkingDelta($id, $content, $representation);
+        }
+
+        if (!$thinkingBlocks[$id]['completed']) {
+            $thinkingBlocks[$id]['completed'] = true;
+            yield new ThinkingComplete($id, $content, $representation);
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $event
+     * @param Thinking|null        $item
+     */
+    private function reasoningItemId(array $event, ?array $item = null): string
+    {
+        $id = $event['item_id'] ?? $item['id'] ?? null;
+        if (\is_string($id) && '' !== $id) {
+            return $id;
+        }
+
+        return 'reasoning-'.($event['output_index'] ?? 0);
+    }
+
+    /**
+     * @param array<string, mixed> $event
+     */
+    private function thinkingBlockIndex(array $event, string $field): int
+    {
+        $index = 'summary' === $field ? ($event['summary_index'] ?? $event['content_index'] ?? 0) : ($event['content_index'] ?? 0);
+
+        return \is_int($index) ? $index : 0;
+    }
+
+    private function thinkingBlockId(string $itemId, string $field, int $index): string
+    {
+        return $itemId.':'.$field.':'.$index;
+    }
+
+    /**
+     * @param array<string, list<string>> $reasoningItemBlocks
+     */
+    private function rememberReasoningItemBlock(array &$reasoningItemBlocks, string $itemId, string $blockId): void
+    {
+        $reasoningItemBlocks[$itemId] ??= [];
+        if (!\in_array($blockId, $reasoningItemBlocks[$itemId], true)) {
+            $reasoningItemBlocks[$itemId][] = $blockId;
         }
     }
 
@@ -597,19 +752,14 @@ class ResultConverter implements ResultConverterInterface
      */
     private function convertOutputMessage(array $output): \Generator
     {
-        $content = $output['content'] ?? [];
-        if ([] === $content) {
-            return;
+        foreach ($output['content'] ?? [] as $content) {
+            if ('refusal' === $content['type']) {
+                yield new TextResult(\sprintf('Model refused to generate output: %s', $content['refusal']));
+                continue;
+            }
+
+            yield new TextResult($content['text']);
         }
-
-        $content = array_pop($content);
-        if ('refusal' === $content['type']) {
-            yield new TextResult(\sprintf('Model refused to generate output: %s', $content['refusal']));
-
-            return;
-        }
-
-        yield new TextResult($content['text']);
     }
 
     /**
@@ -642,21 +792,34 @@ class ResultConverter implements ResultConverterInterface
      */
     private function convertReasoning(array $item): \Generator
     {
-        // The serialized reasoning item doubles as the thinking signature so
-        // that requests using "store" => false can replay it on subsequent
-        // turns. It is attached to the first emitted result to avoid replay
-        // duplication.
-        $signature = json_encode($item, \JSON_THROW_ON_ERROR);
+        $providerState = new ThinkingProviderState(
+            ThinkingProviderState::FORMAT_OPEN_RESPONSES_REASONING,
+            json_encode($item, \JSON_THROW_ON_ERROR),
+        );
+        $hasVisibleContent = false;
 
-        foreach ($item['summary'] ?? [] as $entry) {
-            if ('' !== ($entry['text'] ?? '')) {
-                yield new ThinkingResult($entry['text'], $signature, ThinkingContentType::SUMMARY);
-                $signature = null;
+        foreach ($item['content'] ?? [] as $entry) {
+            if ('' === ($entry['text'] ?? '')) {
+                continue;
             }
+
+            yield new ThinkingResult($entry['text'], ThinkingRepresentation::FULL, $providerState);
+            $providerState = null;
+            $hasVisibleContent = true;
         }
 
-        if (null !== $signature && isset($item['encrypted_content'])) {
-            yield new ThinkingResult(null, $signature, ThinkingContentType::OPAQUE);
+        foreach ($item['summary'] ?? [] as $entry) {
+            if ('' === ($entry['text'] ?? '')) {
+                continue;
+            }
+
+            yield new ThinkingResult($entry['text'], ThinkingRepresentation::SUMMARY, $providerState);
+            $providerState = null;
+            $hasVisibleContent = true;
+        }
+
+        if (!$hasVisibleContent) {
+            yield new ThinkingResult('', ThinkingRepresentation::OPAQUE, $providerState);
         }
     }
 

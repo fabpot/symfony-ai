@@ -15,20 +15,33 @@ use Symfony\AI\Platform\Exception\InvalidArgumentException;
 use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 
 /**
+ * Carries a chunk of provider state for a streamed thinking block.
+ *
  * @author Fabien Potencier <fabien@symfony.com>
  */
-final class ThinkingDelta implements DeltaInterface
+final class ThinkingStateDelta implements DeltaInterface
 {
     /**
      * @param non-empty-string $id
+     * @param non-empty-string $format
+     * @param non-empty-string $payload
      */
     public function __construct(
         private readonly string $id,
-        private readonly string $thinking,
+        private readonly string $format,
+        private readonly string $payload,
         private readonly ThinkingRepresentation $representation,
     ) {
         if ('' === $id) {
             throw new InvalidArgumentException('Thinking stream ID cannot be empty.');
+        }
+
+        if ('' === $format) {
+            throw new InvalidArgumentException('Thinking state delta format cannot be empty.');
+        }
+
+        if ('' === $payload) {
+            throw new InvalidArgumentException('Thinking state delta payload cannot be empty.');
         }
     }
 
@@ -40,9 +53,20 @@ final class ThinkingDelta implements DeltaInterface
         return $this->id;
     }
 
-    public function getThinking(): string
+    /**
+     * @return non-empty-string
+     */
+    public function getFormat(): string
     {
-        return $this->thinking;
+        return $this->format;
+    }
+
+    /**
+     * @return non-empty-string
+     */
+    public function getPayload(): string
+    {
+        return $this->payload;
     }
 
     public function getRepresentation(): ThinkingRepresentation

@@ -31,12 +31,16 @@ use Symfony\AI\Platform\Result\Stream\Delta\TextDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingComplete;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingStart;
+use Symfony\AI\Platform\Result\Stream\Delta\ThinkingStateDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallComplete;
+use Symfony\AI\Platform\Result\Stream\Delta\ToolCallStart;
 use Symfony\AI\Platform\Result\StreamResult;
 use Symfony\AI\Platform\Result\TextResult;
 use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCall;
 use Symfony\AI\Platform\Result\ToolCallResult;
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 use Symfony\Contracts\HttpClient\ResponseInterface;
 
 /**
@@ -243,7 +247,31 @@ final class ResultConverterTest extends TestCase
         $this->assertCount(2, $parts);
         $this->assertInstanceOf(ThinkingResult::class, $parts[0]);
         $this->assertSame('Reasoning step.', $parts[0]->getContent());
-        $this->assertSame('sig_abc', $parts[0]->getSignature());
+        $this->assertSame(ThinkingRepresentation::SUMMARY, $parts[0]->getRepresentation());
+        $this->assertInstanceOf(ThinkingProviderState::class, $state = $parts[0]->getProviderState());
+        $this->assertSame(ThinkingProviderState::FORMAT_GEMINI_THOUGHT_SIGNATURE, $state->getFormat());
+        $this->assertSame('sig_abc', $state->getPayload());
+    }
+
+    public function testConvertsSignatureOnlyPartToOpaqueThinking()
+    {
+        $converter = new ResultConverter();
+        $httpResponse = $this->createMock(ResponseInterface::class);
+        $httpResponse->method('getStatusCode')->willReturn(200);
+        $httpResponse->method('toArray')->willReturn([
+            'candidates' => [['content' => ['parts' => [
+                ['thoughtSignature' => 'opaque_sig'],
+            ]]]],
+        ]);
+
+        $result = $converter->convert(new RawHttpResult($httpResponse));
+
+        $this->assertInstanceOf(ThinkingResult::class, $result);
+        $this->assertSame('', $result->getContent());
+        $this->assertSame(ThinkingRepresentation::OPAQUE, $result->getRepresentation());
+        $this->assertInstanceOf(ThinkingProviderState::class, $state = $result->getProviderState());
+        $this->assertSame(ThinkingProviderState::FORMAT_GEMINI_THOUGHT_SIGNATURE, $state->getFormat());
+        $this->assertSame('opaque_sig', $state->getPayload());
     }
 
     public function testConvertsSignedTextPartCarriesSignature()
@@ -378,13 +406,19 @@ final class ResultConverterTest extends TestCase
         $result = $converter->convert($rawResult, ['stream' => true]);
         $items = iterator_to_array($result->getContent());
 
-        $this->assertCount(3, $items);
+        $this->assertCount(4, $items);
         $this->assertInstanceOf(ThinkingStart::class, $items[0]);
+        $this->assertSame('gemini-thinking-0', $items[0]->getId());
+        $this->assertSame(ThinkingRepresentation::SUMMARY, $items[0]->getRepresentation());
         $this->assertInstanceOf(ThinkingDelta::class, $items[1]);
         $this->assertSame('Let me think.', $items[1]->getThinking());
-        $this->assertInstanceOf(ThinkingComplete::class, $items[2]);
-        $this->assertSame('Let me think.', $items[2]->getThinking());
-        $this->assertSame('sig_1', $items[2]->getSignature());
+        $this->assertSame('gemini-thinking-0', $items[1]->getId());
+        $this->assertInstanceOf(ThinkingStateDelta::class, $items[2]);
+        $this->assertSame(ThinkingProviderState::FORMAT_GEMINI_THOUGHT_SIGNATURE, $items[2]->getFormat());
+        $this->assertSame('sig_1', $items[2]->getPayload());
+        $this->assertInstanceOf(ThinkingComplete::class, $items[3]);
+        $this->assertSame('Let me think.', $items[3]->getThinking());
+        $this->assertSame('sig_1', $items[3]->getProviderState()?->getPayload());
     }
 
     public function testStreamExpandsMultiPartCandidateIntoDeltas()
@@ -459,17 +493,58 @@ final class ResultConverterTest extends TestCase
         $result = $converter->convert($rawResult, ['stream' => true]);
         $items = iterator_to_array($result->getContent());
 
-        $this->assertCount(5, $items);
+        $this->assertCount(6, $items);
         $this->assertInstanceOf(ThinkingStart::class, $items[0]);
+        $this->assertSame('gemini-thinking-0', $items[0]->getId());
         $this->assertInstanceOf(ThinkingDelta::class, $items[1]);
         $this->assertSame('First thought. ', $items[1]->getThinking());
         $this->assertInstanceOf(ThinkingDelta::class, $items[2]);
         $this->assertSame('Second thought.', $items[2]->getThinking());
-        $this->assertInstanceOf(ThinkingComplete::class, $items[3]);
-        $this->assertSame('First thought. Second thought.', $items[3]->getThinking());
-        $this->assertSame('sig_final', $items[3]->getSignature());
-        $this->assertInstanceOf(TextDelta::class, $items[4]);
-        $this->assertSame('The answer.', $items[4]->getText());
+        $this->assertInstanceOf(ThinkingStateDelta::class, $items[3]);
+        $this->assertSame('sig_final', $items[3]->getPayload());
+        $this->assertInstanceOf(ThinkingComplete::class, $items[4]);
+        $this->assertSame('First thought. Second thought.', $items[4]->getThinking());
+        $this->assertSame('sig_final', $items[4]->getProviderState()?->getPayload());
+        $this->assertInstanceOf(TextDelta::class, $items[5]);
+        $this->assertSame('The answer.', $items[5]->getText());
+    }
+
+    public function testStreamPreservesParallelToolCallAndTrailingTextOrder()
+    {
+        $response = $this->createStub(ResponseInterface::class);
+        $response->method('getStatusCode')->willReturn(200);
+        $rawResult = $this->createStub(RawResultInterface::class);
+        $rawResult->method('getObject')->willReturn($response);
+        $rawResult->method('getDataStream')->willReturn((static function (): \Generator {
+            yield ['candidates' => [['content' => ['parts' => [
+                ['text' => 'Think.', 'thought' => true],
+                ['text' => 'Before calls.'],
+                ['functionCall' => ['id' => 'call_1', 'name' => 'first', 'args' => []]],
+                ['functionCall' => ['name' => 'second', 'args' => ['x' => 1]]],
+                ['text' => 'After calls.'],
+            ]]]]];
+        })());
+
+        $result = (new ResultConverter())->convert($rawResult, ['stream' => true]);
+        $items = iterator_to_array($result->getContent());
+
+        $this->assertCount(8, $items);
+        $this->assertInstanceOf(ThinkingStart::class, $items[0]);
+        $this->assertInstanceOf(ThinkingDelta::class, $items[1]);
+        $this->assertInstanceOf(ThinkingComplete::class, $items[2]);
+        $this->assertInstanceOf(TextDelta::class, $items[3]);
+        $this->assertSame('Before calls.', $items[3]->getText());
+        $this->assertInstanceOf(ToolCallStart::class, $items[4]);
+        $this->assertSame('call_1', $items[4]->getId());
+        $this->assertInstanceOf(ToolCallStart::class, $items[5]);
+        $this->assertSame('gemini-tool-call-1', $items[5]->getId());
+        $this->assertInstanceOf(TextDelta::class, $items[6]);
+        $this->assertSame('After calls.', $items[6]->getText());
+        $this->assertInstanceOf(ToolCallComplete::class, $items[7]);
+        $toolCalls = $items[7]->getToolCalls();
+        $this->assertCount(2, $toolCalls);
+        $this->assertSame('call_1', $toolCalls[0]->getId());
+        $this->assertSame('gemini-tool-call-1', $toolCalls[1]->getId());
     }
 
     public function testStreamExpandsToolCallWithTextIntoDeltas()
@@ -494,11 +569,13 @@ final class ResultConverterTest extends TestCase
         $result = $converter->convert($rawResult, ['stream' => true]);
         $items = iterator_to_array($result->getContent());
 
-        $this->assertCount(2, $items);
+        $this->assertCount(3, $items);
         $this->assertInstanceOf(TextDelta::class, $items[0]);
         $this->assertSame('Calling tool.', $items[0]->getText());
-        $this->assertInstanceOf(ToolCallComplete::class, $items[1]);
-        $this->assertSame('search', $items[1]->getToolCalls()[0]->getName());
+        $this->assertInstanceOf(ToolCallStart::class, $items[1]);
+        $this->assertSame('gemini-tool-call-0', $items[1]->getId());
+        $this->assertInstanceOf(ToolCallComplete::class, $items[2]);
+        $this->assertSame('search', $items[2]->getToolCalls()[0]->getName());
     }
 
     public function testStreamSkipsCandidatesWithoutContentParts()
@@ -575,8 +652,12 @@ final class ResultConverterTest extends TestCase
         $result = $converter->convert($rawResult, ['stream' => true]);
         $items = iterator_to_array($result->getContent());
 
-        $this->assertCount(1, $items);
-        $this->assertInstanceOf($expectedClass, $items[0]);
+        $expectedIndex = ToolCallComplete::class === $expectedClass ? 1 : 0;
+        $this->assertCount(ToolCallComplete::class === $expectedClass ? 2 : 1, $items);
+        if (ToolCallComplete::class === $expectedClass) {
+            $this->assertInstanceOf(ToolCallStart::class, $items[0]);
+        }
+        $this->assertInstanceOf($expectedClass, $items[$expectedIndex]);
 
         if (TextDelta::class === $expectedClass) {
             $this->assertSame($expectedPayload['text'], $items[0]->getText());
@@ -592,8 +673,8 @@ final class ResultConverterTest extends TestCase
         }
 
         if (ToolCallComplete::class === $expectedClass) {
-            $this->assertSame($expectedPayload['id'], $items[0]->getToolCalls()[0]->getId());
-            $this->assertSame($expectedPayload['name'], $items[0]->getToolCalls()[0]->getName());
+            $this->assertSame($expectedPayload['id'], $items[$expectedIndex]->getToolCalls()[0]->getId());
+            $this->assertSame($expectedPayload['name'], $items[$expectedIndex]->getToolCalls()[0]->getName());
 
             return;
         }

@@ -34,13 +34,17 @@ use Symfony\AI\Platform\Result\Stream\Delta\TextDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingComplete;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingStart;
+use Symfony\AI\Platform\Result\Stream\Delta\ThinkingStateDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallComplete;
+use Symfony\AI\Platform\Result\Stream\Delta\ToolCallStart;
 use Symfony\AI\Platform\Result\StreamResult;
 use Symfony\AI\Platform\Result\TextResult;
 use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCall;
 use Symfony\AI\Platform\Result\ToolCallResult;
 use Symfony\AI\Platform\ResultConverterInterface;
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 use Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface;
 
 /**
@@ -143,7 +147,13 @@ final class ResultConverter implements ResultConverterInterface
         // Thinking boundary state, carried across chunks: Gemini streams thought parts (often split
         // over several chunks) before the answer, so a thinking block may span multiple iterations.
         $thinking = null;
-        $thinkingSignature = null;
+        $thinkingState = null;
+        $thinkingRepresentation = null;
+        $thinkingId = null;
+        $thinkingBlock = 0;
+        $toolCalls = [];
+        $toolCallIds = [];
+        $toolCallSequence = 0;
 
         foreach ($result->getDataStream() as $data) {
             if (isset($data['usageMetadata']['totalTokenCount']) && 0 < $data['usageMetadata']['totalTokenCount']) {
@@ -183,27 +193,52 @@ final class ResultConverter implements ResultConverterInterface
             foreach ($this->flattenResult($choices[0]) as $leaf) {
                 if ($leaf instanceof ThinkingResult) {
                     if (null === $thinking) {
-                        yield new ThinkingStart();
+                        $thinkingId = 'gemini-thinking-'.$thinkingBlock++;
+                        $thinkingRepresentation = $leaf->getRepresentation();
+                        yield new ThinkingStart($thinkingId, $thinkingRepresentation);
                         $thinking = '';
                     }
 
                     $content = $leaf->getContent() ?? '';
                     $thinking .= $content;
-
-                    if (null !== $leaf->getSignature()) {
-                        $thinkingSignature = $leaf->getSignature();
+                    if ('' !== $content) {
+                        yield new ThinkingDelta($thinkingId, $content, $thinkingRepresentation);
                     }
 
-                    yield new ThinkingDelta($content);
+                    if (null !== ($state = $leaf->getProviderState())) {
+                        $thinkingState = $state;
+                        yield new ThinkingStateDelta($thinkingId, $state->getFormat(), $state->getPayload(), $thinkingRepresentation);
+                    }
 
                     continue;
                 }
 
                 // The first non-thinking part closes an open thinking block.
-                if (null !== $thinking) {
-                    yield new ThinkingComplete($thinking, $thinkingSignature);
+                if (null !== $thinking && null !== $thinkingId && null !== $thinkingRepresentation) {
+                    yield new ThinkingComplete($thinkingId, $thinking, $thinkingRepresentation, $thinkingState);
                     $thinking = null;
-                    $thinkingSignature = null;
+                    $thinkingState = null;
+                    $thinkingRepresentation = null;
+                    $thinkingId = null;
+                }
+
+                if ($leaf instanceof ToolCallResult) {
+                    foreach ($leaf->getContent() as $toolCall) {
+                        $id = $toolCall->getId();
+                        if ('' === $id) {
+                            do {
+                                $id = 'gemini-tool-call-'.$toolCallSequence++;
+                            } while (isset($toolCallIds[$id]));
+                        } else {
+                            ++$toolCallSequence;
+                        }
+                        $toolCallIds[$id] = true;
+
+                        $toolCall = new ToolCall($id, $toolCall->getName(), $toolCall->getArguments(), $toolCall->getSignature());
+                        $toolCalls[] = $toolCall;
+                        yield new ToolCallStart($id, $toolCall->getName());
+                    }
+                    continue;
                 }
 
                 yield from $this->resultToDeltas($leaf);
@@ -211,8 +246,12 @@ final class ResultConverter implements ResultConverterInterface
         }
 
         // A thinking block still open at the end of the stream is completed before the terminal metadata.
-        if (null !== $thinking) {
-            yield new ThinkingComplete($thinking, $thinkingSignature);
+        if (null !== $thinking && null !== $thinkingId && null !== $thinkingRepresentation) {
+            yield new ThinkingComplete($thinkingId, $thinking, $thinkingRepresentation, $thinkingState);
+        }
+
+        if ([] !== $toolCalls) {
+            yield new ToolCallComplete($toolCalls);
         }
 
         // Emitted last: the terminal chunk carries both the finish reason and its content parts.
@@ -260,7 +299,7 @@ final class ResultConverter implements ResultConverterInterface
 
                 return;
             case $result instanceof ThinkingResult:
-                yield new ThinkingDelta($result->getContent() ?? '');
+                yield new ThinkingDelta('gemini-thinking-choice', $result->getContent() ?? '', $result->getRepresentation());
 
                 return;
             case $result instanceof TextResult:
@@ -310,7 +349,11 @@ final class ResultConverter implements ResultConverterInterface
 
         return match (true) {
             isset($contentPart['functionCall']) => new ToolCallResult([$this->convertToolCall($contentPart['functionCall'], $signature)]),
-            true === ($contentPart['thought'] ?? false) => new ThinkingResult($contentPart['text'] ?? '', $signature),
+            true === ($contentPart['thought'] ?? false) => new ThinkingResult(
+                $contentPart['text'] ?? '',
+                \array_key_exists('text', $contentPart) ? ThinkingRepresentation::SUMMARY : ThinkingRepresentation::OPAQUE,
+                null !== $signature && '' !== $signature ? new ThinkingProviderState(ThinkingProviderState::FORMAT_GEMINI_THOUGHT_SIGNATURE, $signature) : null,
+            ),
             isset($contentPart['text']) => new TextResult($contentPart['text'], $signature),
             isset($contentPart['inlineData']) => BinaryResult::fromBase64($contentPart['inlineData']['data'], $contentPart['inlineData']['mimeType'] ?? null),
             isset($contentPart['executableCode']) => new ExecutableCodeResult(
@@ -322,6 +365,11 @@ final class ResultConverter implements ResultConverterInterface
                 self::OUTCOME_OK === $contentPart['codeExecutionResult']['outcome'],
                 $contentPart['codeExecutionResult']['output'],
                 $contentPart['codeExecutionResult']['id'] ?? null,
+            ),
+            null !== $signature && '' !== $signature => new ThinkingResult(
+                '',
+                ThinkingRepresentation::OPAQUE,
+                new ThinkingProviderState(ThinkingProviderState::FORMAT_GEMINI_THOUGHT_SIGNATURE, $signature),
             ),
             default => null,
         };

@@ -53,6 +53,35 @@ const BRIDGE_NS = 'Symfony\\AI\\Platform\\Bridge\\';
 const OPENROUTER_ROUTING_KEYS = ['openrouter/auto', 'openrouter/bodybuilder', 'openrouter/free', '@preset'];
 
 /**
+ * Explicit output representation metadata for Anthropic thinking models.
+ * Models absent from this table keep the generic THINKING capability only.
+ *
+ * @var array<string, Capability>
+ */
+const ANTHROPIC_THINKING_OUTPUT_CAPABILITIES = [
+    'claude-3-7-sonnet-20250219' => Capability::OUTPUT_THINKING_FULL,
+    'claude-fable-5' => Capability::OUTPUT_THINKING_SUMMARY,
+    'claude-haiku-4-5' => Capability::OUTPUT_THINKING_SUMMARY,
+    'claude-haiku-4-5-20251001' => Capability::OUTPUT_THINKING_SUMMARY,
+    'claude-opus-4-0' => Capability::OUTPUT_THINKING_SUMMARY,
+    'claude-opus-4-1' => Capability::OUTPUT_THINKING_SUMMARY,
+    'claude-opus-4-1-20250805' => Capability::OUTPUT_THINKING_SUMMARY,
+    'claude-opus-4-20250514' => Capability::OUTPUT_THINKING_SUMMARY,
+    'claude-opus-4-5' => Capability::OUTPUT_THINKING_SUMMARY,
+    'claude-opus-4-5-20251101' => Capability::OUTPUT_THINKING_SUMMARY,
+    'claude-opus-4-6' => Capability::OUTPUT_THINKING_SUMMARY,
+    'claude-opus-4-7' => Capability::OUTPUT_THINKING_SUMMARY,
+    'claude-opus-4-8' => Capability::OUTPUT_THINKING_SUMMARY,
+    'claude-opus-5' => Capability::OUTPUT_THINKING_SUMMARY,
+    'claude-sonnet-4-0' => Capability::OUTPUT_THINKING_SUMMARY,
+    'claude-sonnet-4-20250514' => Capability::OUTPUT_THINKING_SUMMARY,
+    'claude-sonnet-4-5' => Capability::OUTPUT_THINKING_SUMMARY,
+    'claude-sonnet-4-5-20250929' => Capability::OUTPUT_THINKING_SUMMARY,
+    'claude-sonnet-4-6' => Capability::OUTPUT_THINKING_SUMMARY,
+    'claude-sonnet-5' => Capability::OUTPUT_THINKING_SUMMARY,
+];
+
+/**
  * Per-provider bridges sourced from models.dev.
  *
  * "provider" is the models.dev top-level key. "default" is the model class used for chat/completion
@@ -60,7 +89,7 @@ const OPENROUTER_ROUTING_KEYS = ['openrouter/auto', 'openrouter/bodybuilder', 'o
  * true the bridge has only one class, so embedding models from the source are skipped (they cannot
  * be represented).
  *
- * @var array<string, array{provider: string, default: class-string, single: bool, rules: list<array{0: callable(array): bool, 1: class-string}>}>
+ * @var array<string, array{provider: string, default: class-string, single: bool, rules: list<array{0: callable(array<string, mixed>): bool, 1: class-string}>}>
  */
 $modelsDevBridges = [
     'Anthropic' => [
@@ -157,9 +186,15 @@ $modelsDevBridges = [
                     continue;
                 }
 
+                $capabilities = CapabilityMapper::map($model);
+                if ('Anthropic' === $bridge && isset(ANTHROPIC_THINKING_OUTPUT_CAPABILITIES[$id])) {
+                    $capabilities[] = ANTHROPIC_THINKING_OUTPUT_CAPABILITIES[$id];
+                    $capabilities = array_values(array_unique($capabilities, \SORT_REGULAR));
+                }
+
                 $fresh[(string) $id] = [
                     'class' => pickClass($model, $config),
-                    'capabilities' => CapabilityMapper::map($model),
+                    'capabilities' => $capabilities,
                 ];
             }
 
@@ -235,8 +270,8 @@ function normalizeModelData(string $id, array $model): array
 }
 
 /**
- * @param array<string, mixed>                                                                                      $model
- * @param array{default: class-string, single: bool, rules: list<array{0: callable(array): bool, 1: class-string}>} $config
+ * @param array<string, mixed>                                                                                                     $model
+ * @param array{default: class-string, single: bool, rules: list<array{0: callable(array<string, mixed>): bool, 1: class-string}>} $config
  *
  * @return class-string
  */

@@ -22,6 +22,8 @@ use Symfony\AI\Platform\Message\Content\ExecutableCode;
 use Symfony\AI\Platform\Message\Content\Text;
 use Symfony\AI\Platform\Message\Content\Thinking;
 use Symfony\AI\Platform\Result\ToolCall;
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 
 final class AssistantMessageNormalizerTest extends TestCase
 {
@@ -77,7 +79,7 @@ final class AssistantMessageNormalizerTest extends TestCase
         ];
         yield 'thinking with signature' => [
             new AssistantMessage(
-                new Thinking('Reasoning step.', 'sig_v1'),
+                new Thinking('Reasoning step.', ThinkingRepresentation::SUMMARY, new ThinkingProviderState(ThinkingProviderState::FORMAT_GEMINI_THOUGHT_SIGNATURE, 'sig_v1')),
                 new Text('Answer.'),
             ),
             [
@@ -87,13 +89,13 @@ final class AssistantMessageNormalizerTest extends TestCase
         ];
         yield 'thinking without signature' => [
             new AssistantMessage(new Thinking('Quick thought.')),
-            [['text' => 'Quick thought.', 'thought' => true]],
+            [],
         ];
         yield 'multiple thinking parts with signatures' => [
             new AssistantMessage(
-                new Thinking('First thought.', 'sig_1'),
+                new Thinking('First thought.', ThinkingRepresentation::SUMMARY, new ThinkingProviderState(ThinkingProviderState::FORMAT_GEMINI_THOUGHT_SIGNATURE, 'sig_1')),
                 new Text('Intermediate.'),
-                new Thinking('Second thought.', 'sig_2'),
+                new Thinking('Second thought.', ThinkingRepresentation::SUMMARY, new ThinkingProviderState(ThinkingProviderState::FORMAT_GEMINI_THOUGHT_SIGNATURE, 'sig_2')),
             ),
             [
                 ['text' => 'First thought.', 'thought' => true, 'thoughtSignature' => 'sig_1'],

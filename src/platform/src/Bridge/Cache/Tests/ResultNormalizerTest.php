@@ -23,11 +23,12 @@ use Symfony\AI\Platform\Result\ObjectResult;
 use Symfony\AI\Platform\Result\ResultInterface;
 use Symfony\AI\Platform\Result\StreamResult;
 use Symfony\AI\Platform\Result\TextResult;
-use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCall;
 use Symfony\AI\Platform\Result\ToolCallResult;
 use Symfony\AI\Platform\Result\VectorResult;
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 use Symfony\AI\Platform\Vector\Vector;
 use Symfony\Component\Serializer\Normalizer\NormalizerInterface;
 use Symfony\Component\Serializer\Normalizer\ObjectNormalizer;
@@ -94,6 +95,25 @@ final class ResultNormalizerTest extends TestCase
         $this->assertEquals($result, $resultNormalizer->denormalize($expectedOutput, ResultInterface::class));
     }
 
+    public function testDenormalizesLegacyThinkingSignatureWithoutInferringRepresentation()
+    {
+        $resultNormalizer = new ResultNormalizer(new ObjectNormalizer());
+
+        $result = $resultNormalizer->denormalize([
+            'class' => ThinkingResult::class,
+            'payload' => [
+                'content' => 'legacy reasoning',
+                'signature' => 'sig_legacy',
+                'contentType' => 'summary',
+            ],
+        ], ResultInterface::class);
+
+        $this->assertInstanceOf(ThinkingResult::class, $result);
+        $this->assertSame(ThinkingRepresentation::UNKNOWN, $result->getRepresentation());
+        $this->assertSame(ThinkingProviderState::FORMAT_UNKNOWN, $result->getProviderState()->getFormat());
+        $this->assertSame('sig_legacy', $result->getProviderState()->getPayload());
+    }
+
     public static function provideResultForNormalization(): \Generator
     {
         yield BinaryResult::class => [
@@ -135,7 +155,7 @@ final class ResultNormalizerTest extends TestCase
                 'payload' => [
                     [
                         'class' => ThinkingResult::class,
-                        'payload' => ['content' => 'thinking…', 'signature' => null, 'contentType' => 'full'],
+                        'payload' => ['content' => 'thinking…', 'representation' => 'unknown', 'providerState' => null],
                     ],
                     [
                         'class' => TextResult::class,
@@ -145,10 +165,21 @@ final class ResultNormalizerTest extends TestCase
             ],
         ];
         yield ThinkingResult::class => [
-            new ThinkingResult('reasoning summary', 'sig_abc', ThinkingContentType::SUMMARY),
+            new ThinkingResult(
+                'reasoning summary',
+                ThinkingRepresentation::SUMMARY,
+                new ThinkingProviderState(ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE, 'sig_abc'),
+            ),
             [
                 'class' => ThinkingResult::class,
-                'payload' => ['content' => 'reasoning summary', 'signature' => 'sig_abc', 'contentType' => 'summary'],
+                'payload' => [
+                    'content' => 'reasoning summary',
+                    'representation' => 'summary',
+                    'providerState' => [
+                        'format' => ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE,
+                        'payload' => 'sig_abc',
+                    ],
+                ],
             ],
         ];
         yield ObjectResult::class.'-array' => [

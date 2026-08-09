@@ -26,8 +26,9 @@ use Symfony\AI\Platform\Message\MessageInterface;
 use Symfony\AI\Platform\Message\SystemMessage;
 use Symfony\AI\Platform\Message\ToolCallMessage;
 use Symfony\AI\Platform\Message\UserMessage;
-use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ToolCall;
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 use Symfony\Component\Serializer\Exception\InvalidArgumentException;
 use Symfony\Component\Serializer\Normalizer\DenormalizerInterface;
 use Symfony\Component\Serializer\Normalizer\NormalizerAwareInterface;
@@ -153,8 +154,8 @@ final class MessageNormalizer implements NormalizerInterface, DenormalizerInterf
                 $parts[] = [
                     'type' => Thinking::class,
                     'content' => $part->getContent(),
-                    'signature' => $part->getSignature(),
-                    'contentType' => $part->getContentType()->value,
+                    'representation' => $part->getRepresentation()->value,
+                    'providerState' => self::normalizeThinkingProviderState($part->getProviderState()),
                 ];
             } elseif ($part instanceof ToolCall) {
                 $parts[] = ['type' => ToolCall::class, 'toolCall' => $this->normalizer->normalize($part, $format, $context)];
@@ -212,6 +213,40 @@ final class MessageNormalizer implements NormalizerInterface, DenormalizerInterf
     }
 
     /**
+     * @return array{format: string, payload: string}|null
+     */
+    private static function normalizeThinkingProviderState(?ThinkingProviderState $providerState): ?array
+    {
+        if (null === $providerState) {
+            return null;
+        }
+
+        return [
+            'format' => $providerState->getFormat(),
+            'payload' => $providerState->getPayload(),
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $part
+     */
+    private static function denormalizeThinkingProviderState(array $part): ?ThinkingProviderState
+    {
+        if (isset($part['providerState'])) {
+            return new ThinkingProviderState(
+                $part['providerState']['format'],
+                $part['providerState']['payload'],
+            );
+        }
+
+        if (isset($part['signature']) && '' !== $part['signature']) {
+            return new ThinkingProviderState(ThinkingProviderState::FORMAT_UNKNOWN, $part['signature']);
+        }
+
+        return null;
+    }
+
+    /**
      * @param array<string, mixed> $data
      *
      * @return list<ContentInterface>
@@ -225,8 +260,8 @@ final class MessageNormalizer implements NormalizerInterface, DenormalizerInterf
                     Text::class => new Text($part['text']),
                     Thinking::class => new Thinking(
                         $part['content'] ?? '',
-                        $part['signature'] ?? null,
-                        ThinkingContentType::from($part['contentType'] ?? ThinkingContentType::FULL->value),
+                        isset($part['representation']) ? ThinkingRepresentation::from($part['representation']) : ThinkingRepresentation::UNKNOWN,
+                        self::denormalizeThinkingProviderState($part),
                     ),
                     ToolCall::class => new ToolCall(
                         $part['toolCall']['id'],

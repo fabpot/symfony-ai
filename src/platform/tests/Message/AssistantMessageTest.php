@@ -18,6 +18,8 @@ use Symfony\AI\Platform\Message\Content\Thinking;
 use Symfony\AI\Platform\Message\Role;
 use Symfony\AI\Platform\Result\ToolCall;
 use Symfony\AI\Platform\Tests\Helper\UuidAssertionTrait;
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 use Symfony\Component\Uid\AbstractUid;
 use Symfony\Component\Uid\TimeBasedUidInterface;
 use Symfony\Component\Uid\UuidV7;
@@ -52,7 +54,11 @@ final class AssistantMessageTest extends TestCase
 
     public function testConstructionWithThinkingIsPossible()
     {
-        $thinking = new Thinking('reasoning', 'sig');
+        $thinking = new Thinking(
+            'reasoning',
+            ThinkingRepresentation::FULL,
+            new ThinkingProviderState(ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE, 'sig'),
+        );
         $message = new AssistantMessage($thinking, new Text('answer'));
 
         $this->assertTrue($message->hasThinking());

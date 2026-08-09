@@ -19,11 +19,12 @@ use Symfony\AI\Platform\Bridge\Anthropic\Claude;
 use Symfony\AI\Platform\Bridge\Bedrock\Anthropic\ClaudeResultConverter;
 use Symfony\AI\Platform\Bridge\Bedrock\RawBedrockResult;
 use Symfony\AI\Platform\Exception\RuntimeException;
+use Symfony\AI\Platform\FinishReason\FinishReasonCase;
 use Symfony\AI\Platform\Result\MultiPartResult;
 use Symfony\AI\Platform\Result\TextResult;
-use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCallResult;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 
 /**
  * @author Oskar Stark <oskarstark@googlemail.com>
@@ -253,8 +254,8 @@ final class ClaudeResultConverterTest extends TestCase
 
         $this->assertInstanceOf(ThinkingResult::class, $parts[0]);
         $this->assertSame('', $parts[0]->getContent());
-        $this->assertSame('abc', $parts[0]->getSignature());
-        $this->assertSame(ThinkingContentType::OPAQUE, $parts[0]->getContentType());
+        $this->assertSame('abc', $parts[0]->getProviderState()?->getPayload());
+        $this->assertSame(ThinkingRepresentation::OPAQUE, $parts[0]->getRepresentation());
 
         $this->assertInstanceOf(TextResult::class, $parts[1]);
         $this->assertSame('{"result": 1}', $parts[1]->getContent());
@@ -321,7 +322,7 @@ final class ClaudeResultConverterTest extends TestCase
 
         $this->assertInstanceOf(ThinkingResult::class, $result);
         $this->assertSame('', $result->getContent());
-        $this->assertSame('abc', $result->getSignature());
+        $this->assertSame('abc', $result->getProviderState()?->getPayload());
     }
 
     #[TestDox('Converts redacted thinking to opaque thinking')]
@@ -339,6 +340,7 @@ final class ClaudeResultConverterTest extends TestCase
                         'text' => 'Visible response',
                     ],
                 ],
+                'stop_reason' => 'end_turn',
             ]),
         ]);
         $converter = new ClaudeResultConverter();
@@ -349,8 +351,9 @@ final class ClaudeResultConverterTest extends TestCase
         $parts = $result->getContent();
         $this->assertInstanceOf(ThinkingResult::class, $parts[0]);
         $this->assertSame('', $parts[0]->getContent());
-        $this->assertSame('redacted_data', $parts[0]->getSignature());
-        $this->assertSame(ThinkingContentType::REDACTED, $parts[0]->getContentType());
+        $this->assertSame('redacted_data', $parts[0]->getProviderState()?->getPayload());
+        $this->assertSame(ThinkingRepresentation::OPAQUE, $parts[0]->getRepresentation());
+        $this->assertTrue($result->getMetadata()->get('finish_reason')->is(FinishReasonCase::STOP));
     }
 
     #[TestDox('Converts text content successfully')]

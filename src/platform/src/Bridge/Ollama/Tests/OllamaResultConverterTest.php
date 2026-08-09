@@ -20,14 +20,19 @@ use Symfony\AI\Platform\FinishReason\FinishReasonCase;
 use Symfony\AI\Platform\Model;
 use Symfony\AI\Platform\Result\DeferredResult;
 use Symfony\AI\Platform\Result\InMemoryRawResult;
+use Symfony\AI\Platform\Result\MultiPartResult;
 use Symfony\AI\Platform\Result\RawHttpResult;
 use Symfony\AI\Platform\Result\Stream\Delta\MetadataDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\TextDelta;
+use Symfony\AI\Platform\Result\Stream\Delta\ThinkingComplete;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingDelta;
+use Symfony\AI\Platform\Result\Stream\Delta\ThinkingStart;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallComplete;
 use Symfony\AI\Platform\Result\StreamResult;
 use Symfony\AI\Platform\Result\TextResult;
+use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCallResult;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 use Symfony\AI\Platform\TokenUsage\TokenUsageInterface;
 use Symfony\Contracts\HttpClient\ResponseInterface;
 
@@ -56,12 +61,42 @@ final class OllamaResultConverterTest extends TestCase
         $this->assertSame('Hello world', $result->getContent());
     }
 
+    public function testConvertPreservesExplicitThinkingTextAndToolCallOrder()
+    {
+        $converter = new OllamaResultConverter();
+        $rawResult = new InMemoryRawResult([
+            'message' => [
+                'thinking' => 'I should use a tool.',
+                'content' => 'Calling it now.',
+                'tool_calls' => [[
+                    'function' => [
+                        'name' => 'lookup',
+                        'arguments' => ['q' => 'x'],
+                    ],
+                ]],
+            ],
+        ]);
+
+        $result = $converter->convert($rawResult);
+
+        $this->assertInstanceOf(MultiPartResult::class, $result);
+        $parts = $result->getContent();
+        $this->assertCount(3, $parts);
+        $this->assertInstanceOf(ThinkingResult::class, $parts[0]);
+        $this->assertSame('I should use a tool.', $parts[0]->getContent());
+        $this->assertSame(ThinkingRepresentation::FULL, $parts[0]->getRepresentation());
+        $this->assertInstanceOf(TextResult::class, $parts[1]);
+        $this->assertSame('Calling it now.', $parts[1]->getContent());
+        $this->assertInstanceOf(ToolCallResult::class, $parts[2]);
+        $this->assertSame('lookup', $parts[2]->getContent()[0]->getName());
+    }
+
     public function testConvertToolCallResponse()
     {
         $converter = new OllamaResultConverter();
         $rawResult = new InMemoryRawResult([
             'message' => [
-                'content' => 'This content will be ignored because tool_calls are present',
+                'content' => '',
                 'tool_calls' => [
                     [
                         'function' => [
@@ -88,7 +123,7 @@ final class OllamaResultConverterTest extends TestCase
         $converter = new OllamaResultConverter();
         $rawResult = new InMemoryRawResult([
             'message' => [
-                'content' => 'This content will be ignored because tool_calls are present',
+                'content' => '',
                 'tool_calls' => [
                     [
                         'function' => [
@@ -205,20 +240,27 @@ final class OllamaResultConverterTest extends TestCase
 
         $chunks = iterator_to_array($result->getContent());
 
-        $this->assertCount(6, $chunks);
-        $this->assertInstanceOf(ThinkingDelta::class, $chunks[0]);
-        $this->assertSame('Thinking', $chunks[0]->getThinking());
+        $this->assertCount(8, $chunks);
+        $this->assertInstanceOf(ThinkingStart::class, $chunks[0]);
+        $this->assertSame('ollama-thinking-0', $chunks[0]->getId());
+        $this->assertSame(ThinkingRepresentation::FULL, $chunks[0]->getRepresentation());
         $this->assertInstanceOf(ThinkingDelta::class, $chunks[1]);
-        $this->assertSame(' hard', $chunks[1]->getThinking());
-        $this->assertInstanceOf(TextDelta::class, $chunks[2]);
-        $this->assertSame('Hello', $chunks[2]->getText());
-        $this->assertInstanceOf(TextDelta::class, $chunks[3]);
-        $this->assertSame(' world!', $chunks[3]->getText());
-        $this->assertInstanceOf(TokenUsageInterface::class, $chunks[4]);
-        $this->assertSame(42, $chunks[4]->getPromptTokens());
-        $this->assertSame(17, $chunks[4]->getCompletionTokens());
-        $this->assertInstanceOf(MetadataDelta::class, $chunks[5]);
-        $this->assertTrue($chunks[5]->getValue()->is(FinishReasonCase::STOP));
+        $this->assertSame('Thinking', $chunks[1]->getThinking());
+        $this->assertSame('ollama-thinking-0', $chunks[1]->getId());
+        $this->assertInstanceOf(ThinkingDelta::class, $chunks[2]);
+        $this->assertSame(' hard', $chunks[2]->getThinking());
+        $this->assertInstanceOf(ThinkingComplete::class, $chunks[3]);
+        $this->assertSame('Thinking hard', $chunks[3]->getThinking());
+        $this->assertSame(ThinkingRepresentation::FULL, $chunks[3]->getRepresentation());
+        $this->assertInstanceOf(TextDelta::class, $chunks[4]);
+        $this->assertSame('Hello', $chunks[4]->getText());
+        $this->assertInstanceOf(TextDelta::class, $chunks[5]);
+        $this->assertSame(' world!', $chunks[5]->getText());
+        $this->assertInstanceOf(TokenUsageInterface::class, $chunks[6]);
+        $this->assertSame(42, $chunks[6]->getPromptTokens());
+        $this->assertSame(17, $chunks[6]->getCompletionTokens());
+        $this->assertInstanceOf(MetadataDelta::class, $chunks[7]);
+        $this->assertTrue($chunks[7]->getValue()->is(FinishReasonCase::STOP));
     }
 
     public function testItPromotesTokenUsageMetadataFromStreamingResponse()

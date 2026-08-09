@@ -9,20 +9,17 @@
  * file that was distributed with this source code.
  */
 
-namespace Symfony\AI\Platform\Result\Stream\Delta;
+namespace Symfony\AI\Platform\Thinking;
 
 /**
+ * Describes how much of a model's reasoning is exposed as readable content.
+ *
  * @author Fabien Potencier <fabien@symfony.com>
  */
-final class ThinkingSignature implements DeltaInterface
+enum ThinkingRepresentation: string
 {
-    public function __construct(
-        private readonly string $signature,
-    ) {
-    }
-
-    public function getSignature(): string
-    {
-        return $this->signature;
-    }
+    case FULL = 'full';
+    case SUMMARY = 'summary';
+    case OPAQUE = 'opaque';
+    case UNKNOWN = 'unknown';
 }

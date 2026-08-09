@@ -28,18 +28,22 @@ use Symfony\AI\Platform\FinishReason\FinishReasonCase;
 use Symfony\AI\Platform\Result\ChoiceResult;
 use Symfony\AI\Platform\Result\DeferredResult;
 use Symfony\AI\Platform\Result\InMemoryRawResult;
+use Symfony\AI\Platform\Result\MultiPartResult;
 use Symfony\AI\Platform\Result\RawHttpResult;
 use Symfony\AI\Platform\Result\Stream\Delta\DeltaInterface;
 use Symfony\AI\Platform\Result\Stream\Delta\MetadataDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\TextDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingComplete;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingDelta;
+use Symfony\AI\Platform\Result\Stream\Delta\ThinkingStart;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallComplete;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallStart;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolInputDelta;
 use Symfony\AI\Platform\Result\StreamResult;
 use Symfony\AI\Platform\Result\TextResult;
+use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCallResult;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 use Symfony\Contracts\HttpClient\Exception\ClientExceptionInterface;
 use Symfony\Contracts\HttpClient\ResponseInterface;
 
@@ -65,6 +69,38 @@ class ResultConverterTest extends TestCase
 
         $this->assertInstanceOf(TextResult::class, $result);
         $this->assertSame('Hello world', $result->getContent());
+    }
+
+    public function testConvertPreservesExplicitReasoningTextAndToolCallOrder()
+    {
+        $converter = new ResultConverter();
+        $httpResponse = $this->createMock(ResponseInterface::class);
+        $httpResponse->method('toArray')->willReturn(['choices' => [[
+            'message' => [
+                'role' => 'assistant',
+                'reasoning_content' => 'I should look this up.',
+                'content' => 'Calling a tool.',
+                'tool_calls' => [[
+                    'id' => 'call_123',
+                    'type' => 'function',
+                    'function' => ['name' => 'lookup', 'arguments' => '{"q":"x"}'],
+                ]],
+            ],
+            'finish_reason' => 'tool_calls',
+        ]]]);
+
+        $result = $converter->convert(new RawHttpResult($httpResponse));
+
+        $this->assertInstanceOf(MultiPartResult::class, $result);
+        $parts = $result->getContent();
+        $this->assertCount(3, $parts);
+        $this->assertInstanceOf(ThinkingResult::class, $parts[0]);
+        $this->assertSame('I should look this up.', $parts[0]->getContent());
+        $this->assertSame(ThinkingRepresentation::FULL, $parts[0]->getRepresentation());
+        $this->assertInstanceOf(TextResult::class, $parts[1]);
+        $this->assertSame('Calling a tool.', $parts[1]->getContent());
+        $this->assertInstanceOf(ToolCallResult::class, $parts[2]);
+        $this->assertSame('call_123', $parts[2]->getContent()[0]->getId());
     }
 
     public function testConvertToolWithArgsCallResult()
@@ -466,14 +502,22 @@ class ResultConverterTest extends TestCase
             $chunks[] = $part;
         }
 
+        $thinkingStarts = array_values(array_filter($chunks, static fn ($c) => $c instanceof ThinkingStart));
+        $this->assertCount(1, $thinkingStarts);
+        $this->assertSame('generic-completions-thinking-0', $thinkingStarts[0]->getId());
+        $this->assertSame(ThinkingRepresentation::FULL, $thinkingStarts[0]->getRepresentation());
+
         $thinkingDeltas = array_values(array_filter($chunks, static fn ($c) => $c instanceof ThinkingDelta));
         $this->assertCount(2, $thinkingDeltas);
         $this->assertSame('I need to check the weather', $thinkingDeltas[0]->getThinking());
+        $this->assertSame('generic-completions-thinking-0', $thinkingDeltas[0]->getId());
         $this->assertSame('Let me call the tool', $thinkingDeltas[1]->getThinking());
 
         $thinkingCompletes = array_values(array_filter($chunks, static fn ($c) => $c instanceof ThinkingComplete));
         $this->assertCount(1, $thinkingCompletes);
         $this->assertSame('I need to check the weatherLet me call the tool', $thinkingCompletes[0]->getThinking());
+        $this->assertSame('generic-completions-thinking-0', $thinkingCompletes[0]->getId());
+        $this->assertSame(ThinkingRepresentation::FULL, $thinkingCompletes[0]->getRepresentation());
 
         $textDeltas = array_values(array_filter($chunks, static fn ($c) => $c instanceof TextDelta));
         $this->assertCount(1, $textDeltas);

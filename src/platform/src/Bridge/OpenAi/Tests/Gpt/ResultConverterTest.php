@@ -36,11 +36,14 @@ use Symfony\AI\Platform\Result\Stream\Delta\ThinkingComplete;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingStart;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallComplete;
+use Symfony\AI\Platform\Result\Stream\Delta\ToolCallStart;
 use Symfony\AI\Platform\Result\StreamResult;
 use Symfony\AI\Platform\Result\TextResult;
 use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCallResult;
 use Symfony\AI\Platform\Result\WebSearchResult;
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 use Symfony\AI\Platform\TokenUsage\TokenUsage;
 use Symfony\Contracts\HttpClient\Exception\ClientExceptionInterface;
 use Symfony\Contracts\HttpClient\ResponseInterface;
@@ -204,7 +207,7 @@ class ResultConverterTest extends TestCase
         $this->assertSame('x = -3.75', $parts[2]->getContent());
     }
 
-    public function testConvertReasoningWithoutSummaryIsDropped()
+    public function testConvertIdOnlyReasoningIsPreservedAsOpaqueState()
     {
         $converter = new ResultConverter();
         $httpResponse = $this->createMock(ResponseInterface::class);
@@ -229,8 +232,13 @@ class ResultConverterTest extends TestCase
 
         $result = $converter->convert(new RawHttpResult($httpResponse));
 
-        $this->assertInstanceOf(TextResult::class, $result);
-        $this->assertSame('final', $result->getContent());
+        $this->assertInstanceOf(MultiPartResult::class, $result);
+        $parts = $result->getContent();
+        $this->assertInstanceOf(ThinkingResult::class, $parts[0]);
+        $this->assertSame(ThinkingRepresentation::OPAQUE, $parts[0]->getRepresentation());
+        $this->assertSame(ThinkingProviderState::FORMAT_OPEN_RESPONSES_REASONING, $parts[0]->getProviderState()?->getFormat());
+        $this->assertInstanceOf(TextResult::class, $parts[1]);
+        $this->assertSame('final', $parts[1]->getContent());
     }
 
     public function testConvertWebSearchCallIntoTypedResultAlongsideMessage()
@@ -572,13 +580,15 @@ class ResultConverterTest extends TestCase
         $streamResult = $converter->convert($raw, ['stream' => true]);
         $chunks = iterator_to_array($streamResult->getContent());
 
-        $this->assertCount(2, $chunks);
-        $this->assertInstanceOf(ToolCallComplete::class, $chunks[0]);
-        $this->assertInstanceOf(MetadataDelta::class, $chunks[1]);
-        $this->assertTrue($chunks[1]->getValue()->is(FinishReasonCase::TOOL_CALL));
-        $this->assertSame('call_123', $chunks[0]->getToolCalls()[0]->getId());
-        $this->assertSame('get_weather', $chunks[0]->getToolCalls()[0]->getName());
-        $this->assertSame(['city' => 'Berlin'], $chunks[0]->getToolCalls()[0]->getArguments());
+        $this->assertCount(3, $chunks);
+        $this->assertInstanceOf(ToolCallStart::class, $chunks[0]);
+        $this->assertSame('call_123', $chunks[0]->getId());
+        $this->assertInstanceOf(ToolCallComplete::class, $chunks[1]);
+        $this->assertInstanceOf(MetadataDelta::class, $chunks[2]);
+        $this->assertTrue($chunks[2]->getValue()->is(FinishReasonCase::TOOL_CALL));
+        $this->assertSame('call_123', $chunks[1]->getToolCalls()[0]->getId());
+        $this->assertSame('get_weather', $chunks[1]->getToolCalls()[0]->getName());
+        $this->assertSame(['city' => 'Berlin'], $chunks[1]->getToolCalls()[0]->getArguments());
     }
 
     public function testStreamThrowsWhenResponseCompletedIsMissing()

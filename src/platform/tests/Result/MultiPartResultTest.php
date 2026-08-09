@@ -23,7 +23,7 @@ final class MultiPartResultTest extends TestCase
     public function testAsTextFlattensOnlyTextParts()
     {
         $result = new MultiPartResult([
-            new ThinkingResult('Let me think.', 'sig_abc'),
+            new ThinkingResult('Let me think.'),
             new TextResult('Hello '),
             new TextResult('world.'),
         ]);
@@ -34,7 +34,7 @@ final class MultiPartResultTest extends TestCase
     public function testAsToolCallResultReturnsNullWithoutToolCallParts()
     {
         $result = new MultiPartResult([
-            new ThinkingResult('Let me think.', 'sig_abc'),
+            new ThinkingResult('Let me think.'),
             new TextResult('Hello world.'),
         ]);
 
@@ -47,7 +47,7 @@ final class MultiPartResultTest extends TestCase
         $toolCall2 = new ToolCall('id2', 'tool2', ['arg2' => 'value2']);
 
         $result = new MultiPartResult([
-            new ThinkingResult('Let me think.', 'sig_abc'),
+            new ThinkingResult('Let me think.'),
             new TextResult('Looking both up.'),
             new ToolCallResult([$toolCall1]),
             new ToolCallResult([$toolCall2]),

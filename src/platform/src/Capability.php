@@ -33,6 +33,8 @@ enum Capability: string
     // OUTPUT
     case OUTPUT_AUDIO = 'output-audio';
     case OUTPUT_IMAGE = 'output-image';
+    case OUTPUT_THINKING_FULL = 'output-thinking-full';
+    case OUTPUT_THINKING_SUMMARY = 'output-thinking-summary';
     case OUTPUT_STREAMING = 'output-streaming';
     case OUTPUT_STRUCTURED = 'output-structured';
     case OUTPUT_TEXT = 'output-text';

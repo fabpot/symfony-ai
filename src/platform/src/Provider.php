@@ -158,7 +158,10 @@ final class Provider implements ProviderInterface
     {
         foreach ($this->resultConverters as $resultConverter) {
             if ($resultConverter->supports($model)) {
-                return new DeferredResult($resultConverter, $result, $options);
+                return new DeferredResult($resultConverter, $result, [
+                    ...$options,
+                    Contract::CONTEXT_MODEL => $model,
+                ]);
             }
         }
 

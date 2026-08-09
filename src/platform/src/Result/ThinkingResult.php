@@ -11,6 +11,9 @@
 
 namespace Symfony\AI\Platform\Result;
 
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
+
 /**
  * Represents a separate thinking block/part.
  */
@@ -18,8 +21,8 @@ final class ThinkingResult extends BaseResult
 {
     public function __construct(
         private readonly ?string $content = null,
-        private readonly ?string $signature = null,
-        private readonly ThinkingContentType $contentType = ThinkingContentType::FULL,
+        private readonly ThinkingRepresentation $representation = ThinkingRepresentation::UNKNOWN,
+        private readonly ?ThinkingProviderState $providerState = null,
     ) {
     }
 
@@ -28,13 +31,13 @@ final class ThinkingResult extends BaseResult
         return $this->content;
     }
 
-    public function getSignature(): ?string
+    public function getRepresentation(): ThinkingRepresentation
     {
-        return $this->signature;
+        return $this->representation;
     }
 
-    public function getContentType(): ThinkingContentType
+    public function getProviderState(): ?ThinkingProviderState
     {
-        return $this->contentType;
+        return $this->providerState;
     }
 }

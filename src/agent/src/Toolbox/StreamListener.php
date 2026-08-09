@@ -11,6 +11,7 @@
 
 namespace Symfony\AI\Agent\Toolbox;
 
+use Symfony\AI\Agent\Exception\LogicException;
 use Symfony\AI\Platform\Message\AssistantMessage;
 use Symfony\AI\Platform\Message\Content\ContentInterface;
 use Symfony\AI\Platform\Message\Content\Text;
@@ -21,14 +22,15 @@ use Symfony\AI\Platform\Result\Stream\CompleteEvent;
 use Symfony\AI\Platform\Result\Stream\Delta\TextDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingComplete;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingDelta;
-use Symfony\AI\Platform\Result\Stream\Delta\ThinkingSignature;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingStart;
+use Symfony\AI\Platform\Result\Stream\Delta\ThinkingStateDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallComplete;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallStart;
 use Symfony\AI\Platform\Result\Stream\DeltaEvent;
 use Symfony\AI\Platform\Result\Stream\StartEvent;
-use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ToolCallResult;
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 
 /**
  * @author Denis Zunke <denis.zunke@gmail.com>
@@ -43,11 +45,12 @@ final class StreamListener extends AbstractStreamListener
      */
     private array $assistantContent = [];
 
-    // Index of the thinking block currently receiving streamed chunks
-    private ?int $currentThinkingIndex = null;
-
-    // Last thinking block, for providers that emit its signature after completion
-    private ?int $lastThinkingIndex = null;
+    /**
+     * Stable block IDs keep interleaved thinking deltas associated with the right content.
+     *
+     * @var array<string, int>
+     */
+    private array $thinkingContentIndexes = [];
     private ?ResultInterface $result = null;
     private bool $toolHandled = false;
 
@@ -59,8 +62,7 @@ final class StreamListener extends AbstractStreamListener
     public function onStart(StartEvent $event): void
     {
         $this->assistantContent = [];
-        $this->currentThinkingIndex = null;
-        $this->lastThinkingIndex = null;
+        $this->thinkingContentIndexes = [];
         $this->result = null;
         $this->toolHandled = false;
     }
@@ -91,53 +93,48 @@ final class StreamListener extends AbstractStreamListener
             } else {
                 $this->assistantContent[] = new Text($delta->getText());
             }
-            $this->currentThinkingIndex = null;
         } elseif ($delta instanceof ThinkingStart) {
-            $this->startThinking($delta->getContentType());
+            $this->getThinkingContentIndex($delta->getId(), $delta->getRepresentation());
         } elseif ($delta instanceof ThinkingDelta) {
-            $index = $this->currentThinkingIndex ?? $this->startThinking($delta->getContentType());
+            $index = $this->getThinkingContentIndex($delta->getId(), $delta->getRepresentation());
             /** @var Thinking $thinking */
             $thinking = $this->assistantContent[$index];
             $this->assistantContent[$index] = new Thinking(
                 $thinking->getContent().$delta->getThinking(),
-                $thinking->getSignature(),
-                $delta->getContentType(),
+                $delta->getRepresentation(),
+                $thinking->getProviderState(),
             );
-        } elseif ($delta instanceof ThinkingSignature) {
-            $index = $this->currentThinkingIndex;
-            if (null === $index) {
-                $index = $this->lastThinkingIndex;
-                $thinking = null === $index ? null : $this->assistantContent[$index];
-                if (!$thinking instanceof Thinking || null !== $thinking->getSignature()) {
-                    $index = $this->startThinking();
-                    // A signature without an open thinking block is a complete
-                    // provider-state item, not a chunk of the next one
-                    $this->currentThinkingIndex = null;
-                }
+        } elseif ($delta instanceof ThinkingStateDelta) {
+            $index = $this->getThinkingContentIndex($delta->getId(), $delta->getRepresentation());
+            /** @var Thinking $thinking */
+            $thinking = $this->assistantContent[$index];
+            $providerState = $thinking->getProviderState();
+            if (null !== $providerState && $providerState->getFormat() !== $delta->getFormat()) {
+                throw new LogicException(\sprintf('Thinking block "%s" changed provider state format from "%s" to "%s".', $delta->getId(), $providerState->getFormat(), $delta->getFormat()));
             }
 
-            /** @var Thinking $thinking */
-            $thinking = $this->assistantContent[$index];
             $this->assistantContent[$index] = new Thinking(
                 $thinking->getContent(),
-                ($thinking->getSignature() ?? '').$delta->getSignature(),
-                $thinking->getContentType(),
+                $delta->getRepresentation(),
+                new ThinkingProviderState($delta->getFormat(), ($providerState?->getPayload() ?? '').$delta->getPayload()),
             );
-            $this->lastThinkingIndex = $index;
         } elseif ($delta instanceof ThinkingComplete) {
-            $index = $this->currentThinkingIndex ?? $this->startThinking($delta->getContentType());
+            $index = $this->getThinkingContentIndex($delta->getId(), $delta->getRepresentation());
             /** @var Thinking $thinking */
             $thinking = $this->assistantContent[$index];
+            $providerState = $thinking->getProviderState();
+            $completedProviderState = $delta->getProviderState();
+            if (null !== $providerState && null !== $completedProviderState && $providerState->getFormat() !== $completedProviderState->getFormat()) {
+                throw new LogicException(\sprintf('Thinking block "%s" changed provider state format from "%s" to "%s".', $delta->getId(), $providerState->getFormat(), $completedProviderState->getFormat()));
+            }
+
             $this->assistantContent[$index] = new Thinking(
                 $delta->getThinking(),
-                $delta->getSignature() ?? $thinking->getSignature(),
-                $delta->getContentType(),
+                $delta->getRepresentation(),
+                $completedProviderState ?? $providerState,
             );
-            $this->currentThinkingIndex = null;
-            $this->lastThinkingIndex = $index;
         } elseif ($delta instanceof ToolCallStart) {
             $this->assistantContent[] = $delta->getId();
-            $this->currentThinkingIndex = null;
         }
 
         if (!$delta instanceof ToolCallComplete) {
@@ -154,8 +151,8 @@ final class StreamListener extends AbstractStreamListener
         $content = [];
         $placedToolCalls = [];
         foreach ($this->assistantContent as $part) {
-            // A frame without content or a signature is structural only and must not be replayed
-            if ($part instanceof Thinking && '' === $part->getContent() && null === $part->getSignature()) {
+            // A frame without content or provider state is structural only and must not be replayed
+            if ($part instanceof Thinking && '' === $part->getContent() && null === $part->getProviderState()) {
                 continue;
             }
 
@@ -188,8 +185,7 @@ final class StreamListener extends AbstractStreamListener
     public function onComplete(CompleteEvent $event): void
     {
         $this->assistantContent = [];
-        $this->currentThinkingIndex = null;
-        $this->lastThinkingIndex = null;
+        $this->thinkingContentIndexes = [];
         $this->toolHandled = false;
 
         if (null !== $this->result) {
@@ -197,10 +193,21 @@ final class StreamListener extends AbstractStreamListener
         }
     }
 
-    private function startThinking(ThinkingContentType $contentType = ThinkingContentType::FULL): int
+    private function getThinkingContentIndex(string $id, ThinkingRepresentation $representation): int
     {
-        $this->assistantContent[] = new Thinking('', contentType: $contentType);
+        if (isset($this->thinkingContentIndexes[$id])) {
+            $index = $this->thinkingContentIndexes[$id];
+            /** @var Thinking $thinking */
+            $thinking = $this->assistantContent[$index];
+            if ($thinking->getRepresentation() !== $representation) {
+                throw new LogicException(\sprintf('Thinking block "%s" changed representation from "%s" to "%s".', $id, $thinking->getRepresentation()->value, $representation->value));
+            }
 
-        return $this->currentThinkingIndex = $this->lastThinkingIndex = array_key_last($this->assistantContent);
+            return $index;
+        }
+
+        $this->assistantContent[] = new Thinking('', $representation);
+
+        return $this->thinkingContentIndexes[$id] = \count($this->assistantContent) - 1;
     }
 }

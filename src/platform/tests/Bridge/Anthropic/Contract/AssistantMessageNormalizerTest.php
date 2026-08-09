@@ -21,6 +21,8 @@ use Symfony\AI\Platform\Message\Content\ExecutableCode;
 use Symfony\AI\Platform\Message\Content\Text;
 use Symfony\AI\Platform\Message\Content\Thinking;
 use Symfony\AI\Platform\Result\ToolCall;
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 
 /**
  * @author Oskar Stark <oskarstark@googlemail.com>
@@ -108,7 +110,7 @@ final class AssistantMessageNormalizerTest extends TestCase
 
     public function testNormalizeWithThinkingContent()
     {
-        $message = new AssistantMessage(new Thinking('Let me think about this...', 'sig-abc'));
+        $message = new AssistantMessage(new Thinking('Let me think about this...', ThinkingRepresentation::UNKNOWN, new ThinkingProviderState(ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE, 'sig-abc')));
 
         $this->assertSame([
             'role' => 'assistant',
@@ -125,7 +127,7 @@ final class AssistantMessageNormalizerTest extends TestCase
     public function testNormalizeWithThinkingContentAndText()
     {
         $message = new AssistantMessage(
-            new Thinking('Let me think about this...', 'sig-abc'),
+            new Thinking('Let me think about this...', ThinkingRepresentation::UNKNOWN, new ThinkingProviderState(ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE, 'sig-abc')),
             new Text('The answer is 42.'),
         );
 

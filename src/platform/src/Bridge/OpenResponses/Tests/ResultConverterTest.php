@@ -43,15 +43,17 @@ use Symfony\AI\Platform\Result\Stream\Delta\MetadataDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\TextDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingComplete;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingDelta;
-use Symfony\AI\Platform\Result\Stream\Delta\ThinkingSignature;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingStart;
+use Symfony\AI\Platform\Result\Stream\Delta\ThinkingStateDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallComplete;
+use Symfony\AI\Platform\Result\Stream\Delta\ToolCallStart;
 use Symfony\AI\Platform\Result\StreamResult;
 use Symfony\AI\Platform\Result\TextResult;
-use Symfony\AI\Platform\Result\ThinkingContentType;
 use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCallResult;
 use Symfony\AI\Platform\Result\WebSearchResult;
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 use Symfony\AI\Platform\TokenUsage\TokenUsage;
 use Symfony\Contracts\HttpClient\Exception\ClientExceptionInterface;
 use Symfony\Contracts\HttpClient\ResponseInterface;
@@ -219,9 +221,60 @@ final class ResultConverterTest extends TestCase
         $this->assertCount(2, $parts);
         $this->assertInstanceOf(ThinkingResult::class, $parts[0]);
         $this->assertSame('Let me work through this.', $parts[0]->getContent());
-        $this->assertSame(ThinkingContentType::SUMMARY, $parts[0]->getContentType());
+        $this->assertSame(ThinkingRepresentation::SUMMARY, $parts[0]->getRepresentation());
         $this->assertInstanceOf(TextResult::class, $parts[1]);
         $this->assertSame('{"answer": 42}', $parts[1]->getContent());
+    }
+
+    public function testConvertReasoningPreservesFullContentAndSummaryRepresentations()
+    {
+        $converter = new ResultConverter();
+        $httpResponse = $this->createMock(ResponseInterface::class);
+        $reasoningItem = [
+            'type' => 'reasoning',
+            'id' => 'rs_full',
+            'content' => [['type' => 'reasoning_text', 'text' => 'Full chain.']],
+            'summary' => [['type' => 'summary_text', 'text' => 'Short version.']],
+        ];
+        $httpResponse->method('toArray')->willReturn(['output' => [$reasoningItem]]);
+
+        $result = $converter->convert(new RawHttpResult($httpResponse));
+
+        $this->assertInstanceOf(MultiPartResult::class, $result);
+        $parts = $result->getContent();
+        $this->assertCount(2, $parts);
+        $this->assertInstanceOf(ThinkingResult::class, $parts[0]);
+        $this->assertInstanceOf(ThinkingResult::class, $parts[1]);
+        $this->assertSame(ThinkingRepresentation::FULL, $parts[0]->getRepresentation());
+        $this->assertSame('Full chain.', $parts[0]->getContent());
+        $this->assertInstanceOf(ThinkingProviderState::class, $state = $parts[0]->getProviderState());
+        $this->assertSame(ThinkingProviderState::FORMAT_OPEN_RESPONSES_REASONING, $state->getFormat());
+        $this->assertSame(ThinkingRepresentation::SUMMARY, $parts[1]->getRepresentation());
+        $this->assertSame('Short version.', $parts[1]->getContent());
+        $this->assertNull($parts[1]->getProviderState());
+    }
+
+    public function testConvertPreservesOutputItemOrderAroundFunctionCalls()
+    {
+        $converter = new ResultConverter();
+        $httpResponse = $this->createMock(ResponseInterface::class);
+        $httpResponse->method('toArray')->willReturn(['output' => [
+            ['type' => 'message', 'id' => 'before', 'role' => 'assistant', 'content' => [['type' => 'output_text', 'text' => 'Before']]],
+            ['type' => 'function_call', 'call_id' => 'call_1', 'name' => 'lookup', 'arguments' => '{"query":"x"}'],
+            ['type' => 'message', 'id' => 'after', 'role' => 'assistant', 'content' => [['type' => 'output_text', 'text' => 'After']]],
+        ]]);
+
+        $result = $converter->convert(new RawHttpResult($httpResponse));
+
+        $this->assertInstanceOf(MultiPartResult::class, $result);
+        $parts = $result->getContent();
+        $this->assertCount(3, $parts);
+        $this->assertInstanceOf(TextResult::class, $parts[0]);
+        $this->assertSame('Before', $parts[0]->getContent());
+        $this->assertInstanceOf(ToolCallResult::class, $parts[1]);
+        $this->assertSame('call_1', $parts[1]->getContent()[0]->getId());
+        $this->assertInstanceOf(TextResult::class, $parts[2]);
+        $this->assertSame('After', $parts[2]->getContent());
     }
 
     public function testConvertReasoningEmitsOneThinkingResultPerSummaryChunk()
@@ -263,7 +316,7 @@ final class ResultConverterTest extends TestCase
         $this->assertSame('x = -3.75', $parts[2]->getContent());
     }
 
-    public function testConvertReasoningAttachesSerializedItemAsSignature()
+    public function testConvertReasoningAttachesSerializedItemAsProviderState()
     {
         $converter = new ResultConverter();
         $httpResponse = $this->createMock(ResponseInterface::class);
@@ -296,10 +349,12 @@ final class ResultConverterTest extends TestCase
         $parts = $result->getContent();
         $this->assertInstanceOf(ThinkingResult::class, $parts[0]);
         $this->assertSame('Thinking it through.', $parts[0]->getContent());
-        $this->assertSame($reasoningItem, json_decode($parts[0]->getSignature(), true));
+        $this->assertInstanceOf(ThinkingProviderState::class, $state = $parts[0]->getProviderState());
+        $this->assertSame(ThinkingProviderState::FORMAT_OPEN_RESPONSES_REASONING, $state->getFormat());
+        $this->assertSame($reasoningItem, json_decode($state->getPayload(), true));
     }
 
-    public function testConvertReasoningWithEncryptedContentButNoSummaryKeepsSignature()
+    public function testConvertReasoningWithEncryptedContentButNoSummaryKeepsProviderState()
     {
         $converter = new ResultConverter();
         $httpResponse = $this->createMock(ResponseInterface::class);
@@ -329,12 +384,14 @@ final class ResultConverterTest extends TestCase
         $this->assertInstanceOf(MultiPartResult::class, $result);
         $parts = $result->getContent();
         $this->assertInstanceOf(ThinkingResult::class, $parts[0]);
-        $this->assertNull($parts[0]->getContent());
-        $this->assertSame(ThinkingContentType::OPAQUE, $parts[0]->getContentType());
-        $this->assertSame($reasoningItem, json_decode($parts[0]->getSignature(), true));
+        $this->assertSame('', $parts[0]->getContent());
+        $this->assertSame(ThinkingRepresentation::OPAQUE, $parts[0]->getRepresentation());
+        $this->assertInstanceOf(ThinkingProviderState::class, $state = $parts[0]->getProviderState());
+        $this->assertSame(ThinkingProviderState::FORMAT_OPEN_RESPONSES_REASONING, $state->getFormat());
+        $this->assertSame($reasoningItem, json_decode($state->getPayload(), true));
     }
 
-    public function testConvertReasoningWithoutSummaryIsDropped()
+    public function testConvertIdOnlyReasoningIsPreservedAsOpaqueState()
     {
         $converter = new ResultConverter();
         $httpResponse = $this->createMock(ResponseInterface::class);
@@ -359,8 +416,14 @@ final class ResultConverterTest extends TestCase
 
         $result = $converter->convert(new RawHttpResult($httpResponse));
 
-        $this->assertInstanceOf(TextResult::class, $result);
-        $this->assertSame('final', $result->getContent());
+        $this->assertInstanceOf(MultiPartResult::class, $result);
+        $parts = $result->getContent();
+        $this->assertInstanceOf(ThinkingResult::class, $parts[0]);
+        $this->assertSame('', $parts[0]->getContent());
+        $this->assertSame(ThinkingRepresentation::OPAQUE, $parts[0]->getRepresentation());
+        $this->assertSame(ThinkingProviderState::FORMAT_OPEN_RESPONSES_REASONING, $parts[0]->getProviderState()?->getFormat());
+        $this->assertInstanceOf(TextResult::class, $parts[1]);
+        $this->assertSame('final', $parts[1]->getContent());
     }
 
     public function testConvertWebSearchCallIntoTypedResultAlongsideMessage()
@@ -738,13 +801,7 @@ final class ResultConverterTest extends TestCase
         $httpResponse->method('toArray')->willReturn([
             'status' => 'incomplete',
             'incomplete_details' => ['reason' => 'content_filter'],
-            'output' => [
-                [
-                    'type' => 'reasoning',
-                    'id' => 'rs_1',
-                    'summary' => [],
-                ],
-            ],
+            'output' => [],
         ]);
 
         $this->expectException(RuntimeException::class);
@@ -760,14 +817,7 @@ final class ResultConverterTest extends TestCase
         $httpResponse->method('toArray')->willReturn([
             'status' => 'incomplete',
             'incomplete_details' => ['reason' => 'max_output_tokens'],
-            'output' => [
-                [
-                    'type' => 'reasoning',
-                    'id' => 'rs_1',
-                    'summary' => [],
-                    'encrypted_content' => 'gAAAAA-encrypted',
-                ],
-            ],
+            'output' => [],
         ]);
 
         $this->expectException(MaxOutputTokensException::class);
@@ -781,14 +831,7 @@ final class ResultConverterTest extends TestCase
         $converter = new ResultConverter();
         $httpResponse = $this->createMock(ResponseInterface::class);
         $httpResponse->method('toArray')->willReturn([
-            'output' => [
-                [
-                    'type' => 'reasoning',
-                    'id' => 'rs_1',
-                    'summary' => [],
-                    'encrypted_content' => 'gAAAAA-encrypted',
-                ],
-            ],
+            'output' => [],
         ]);
 
         $this->expectException(RuntimeException::class);
@@ -1159,11 +1202,12 @@ final class ResultConverterTest extends TestCase
 
         $chunks = iterator_to_array($streamResult->getContent());
 
-        $this->assertCount(2, $chunks);
-        $this->assertInstanceOf(ToolCallComplete::class, $chunks[0]);
-        $this->assertInstanceOf(MetadataDelta::class, $chunks[1]);
-        $this->assertTrue($chunks[1]->getValue()->is(FinishReasonCase::TOOL_CALL));
-        $toolCalls = $chunks[0]->getToolCalls();
+        $this->assertCount(3, $chunks);
+        $this->assertInstanceOf(ToolCallStart::class, $chunks[0]);
+        $this->assertInstanceOf(ToolCallComplete::class, $chunks[1]);
+        $this->assertInstanceOf(MetadataDelta::class, $chunks[2]);
+        $this->assertTrue($chunks[2]->getValue()->is(FinishReasonCase::TOOL_CALL));
+        $toolCalls = $chunks[1]->getToolCalls();
         $this->assertCount(1, $toolCalls);
         $this->assertSame('call_456', $toolCalls[0]->getId());
         $this->assertSame('get_weather', $toolCalls[0]->getName());
@@ -1235,11 +1279,13 @@ final class ResultConverterTest extends TestCase
 
         $chunks = iterator_to_array($streamResult->getContent());
 
-        $this->assertCount(2, $chunks);
-        $this->assertInstanceOf(ToolCallComplete::class, $chunks[0]);
-        $this->assertInstanceOf(MetadataDelta::class, $chunks[1]);
-        $this->assertTrue($chunks[1]->getValue()->is(FinishReasonCase::TOOL_CALL));
-        $toolCalls = $chunks[0]->getToolCalls();
+        $this->assertCount(3, $chunks);
+        $this->assertInstanceOf(ToolCallStart::class, $chunks[0]);
+        $this->assertSame('call_789', $chunks[0]->getId());
+        $this->assertInstanceOf(ToolCallComplete::class, $chunks[1]);
+        $this->assertInstanceOf(MetadataDelta::class, $chunks[2]);
+        $this->assertTrue($chunks[2]->getValue()->is(FinishReasonCase::TOOL_CALL));
+        $toolCalls = $chunks[1]->getToolCalls();
         $this->assertCount(1, $toolCalls);
         $this->assertSame('call_789', $toolCalls[0]->getId());
         $this->assertSame('get_weather', $toolCalls[0]->getName());
@@ -1454,6 +1500,53 @@ final class ResultConverterTest extends TestCase
         }
     }
 
+    public function testStreamHandlesFullReasoningEventsWithStableIds()
+    {
+        $converter = new ResultConverter();
+        $httpResponse = $this->createStub(ResponseInterface::class);
+        $httpResponse->method('getStatusCode')->willReturn(200);
+        $events = [
+            ['type' => 'response.reasoning_text.delta', 'item_id' => 'rs_a', 'content_index' => 1, 'delta' => 'Full '],
+            ['type' => 'response.reasoning_text.delta', 'item_id' => 'rs_a', 'content_index' => 1, 'delta' => 'reasoning.'],
+            ['type' => 'response.reasoning_text.done', 'item_id' => 'rs_a', 'content_index' => 1, 'text' => 'Full reasoning.'],
+            ['type' => 'response.completed', 'response' => ['output' => []]],
+        ];
+
+        $streamResult = $converter->convert(new InMemoryRawResult([], $events, $httpResponse), ['stream' => true]);
+        $chunks = iterator_to_array($streamResult->getContent());
+
+        $this->assertInstanceOf(ThinkingStart::class, $chunks[0]);
+        $this->assertSame('rs_a:content:1', $chunks[0]->getId());
+        $this->assertSame(ThinkingRepresentation::FULL, $chunks[0]->getRepresentation());
+        $this->assertInstanceOf(ThinkingDelta::class, $chunks[1]);
+        $this->assertSame('rs_a:content:1', $chunks[1]->getId());
+        $this->assertInstanceOf(ThinkingDelta::class, $chunks[2]);
+        $this->assertInstanceOf(ThinkingComplete::class, $chunks[3]);
+        $this->assertSame('rs_a:content:1', $chunks[3]->getId());
+        $this->assertSame('Full reasoning.', $chunks[3]->getThinking());
+        $this->assertSame(ThinkingRepresentation::FULL, $chunks[3]->getRepresentation());
+    }
+
+    public function testStreamEmitsToolCallStartWhenOutputItemIsAdded()
+    {
+        $converter = new ResultConverter();
+        $httpResponse = $this->createStub(ResponseInterface::class);
+        $httpResponse->method('getStatusCode')->willReturn(200);
+        $events = [
+            ['type' => 'response.output_text.delta', 'delta' => 'Before'],
+            ['type' => 'response.output_item.added', 'item' => ['type' => 'function_call', 'call_id' => 'call_1', 'name' => 'lookup', 'arguments' => '']],
+            ['type' => 'response.completed', 'response' => ['output' => [['type' => 'function_call', 'call_id' => 'call_1', 'name' => 'lookup', 'arguments' => '{}']]]],
+        ];
+
+        $streamResult = $converter->convert(new InMemoryRawResult([], $events, $httpResponse), ['stream' => true]);
+        $chunks = iterator_to_array($streamResult->getContent());
+
+        $this->assertInstanceOf(TextDelta::class, $chunks[0]);
+        $this->assertInstanceOf(ToolCallStart::class, $chunks[1]);
+        $this->assertSame('call_1', $chunks[1]->getId());
+        $this->assertInstanceOf(ToolCallComplete::class, $chunks[2]);
+    }
+
     public function testStreamWithReasoningContent()
     {
         $converter = new ResultConverter();
@@ -1495,21 +1588,21 @@ final class ResultConverterTest extends TestCase
 
         $this->assertCount(6, $chunks);
         $this->assertInstanceOf(ThinkingStart::class, $chunks[0]);
-        $this->assertSame(ThinkingContentType::SUMMARY, $chunks[0]->getContentType());
+        $this->assertSame(ThinkingRepresentation::SUMMARY, $chunks[0]->getRepresentation());
         $this->assertInstanceOf(ThinkingDelta::class, $chunks[1]);
         $this->assertSame('Let me think', $chunks[1]->getThinking());
-        $this->assertSame(ThinkingContentType::SUMMARY, $chunks[1]->getContentType());
+        $this->assertSame(ThinkingRepresentation::SUMMARY, $chunks[1]->getRepresentation());
         $this->assertInstanceOf(ThinkingDelta::class, $chunks[2]);
         $this->assertSame(' about this...', $chunks[2]->getThinking());
-        $this->assertSame(ThinkingContentType::SUMMARY, $chunks[2]->getContentType());
+        $this->assertSame(ThinkingRepresentation::SUMMARY, $chunks[2]->getRepresentation());
         $this->assertInstanceOf(ThinkingComplete::class, $chunks[3]);
         $this->assertSame('Let me think about this...', $chunks[3]->getThinking());
-        $this->assertSame(ThinkingContentType::SUMMARY, $chunks[3]->getContentType());
+        $this->assertSame(ThinkingRepresentation::SUMMARY, $chunks[3]->getRepresentation());
         $this->assertInstanceOf(TextDelta::class, $chunks[4]);
         $this->assertSame('The answer is 42.', $chunks[4]->getText());
     }
 
-    public function testStreamEmitsThinkingSignatureForReasoningItems()
+    public function testStreamEmitsThinkingProviderStateForReasoningItems()
     {
         $converter = new ResultConverter();
 
@@ -1550,9 +1643,16 @@ final class ResultConverterTest extends TestCase
 
         $chunks = iterator_to_array($streamResult->getContent());
 
-        $this->assertInstanceOf(ThinkingSignature::class, $chunks[0]);
-        $this->assertSame($reasoningItem, json_decode($chunks[0]->getSignature(), true));
-        $this->assertInstanceOf(TextDelta::class, $chunks[1]);
+        $this->assertInstanceOf(ThinkingStart::class, $chunks[0]);
+        $this->assertSame('rs_1:summary:0', $chunks[0]->getId());
+        $this->assertInstanceOf(ThinkingDelta::class, $chunks[1]);
+        $this->assertSame('Reasoning about it.', $chunks[1]->getThinking());
+        $this->assertInstanceOf(ThinkingStateDelta::class, $chunks[2]);
+        $this->assertSame(ThinkingProviderState::FORMAT_OPEN_RESPONSES_REASONING, $chunks[2]->getFormat());
+        $this->assertSame($reasoningItem, json_decode($chunks[2]->getPayload(), true));
+        $this->assertInstanceOf(ThinkingComplete::class, $chunks[3]);
+        $this->assertSame('rs_1:summary:0', $chunks[3]->getId());
+        $this->assertInstanceOf(TextDelta::class, $chunks[4]);
     }
 
     public function testStreamFramesOpaqueReasoningItems()
@@ -1586,12 +1686,13 @@ final class ResultConverterTest extends TestCase
         $chunks = iterator_to_array($streamResult->getContent());
 
         $this->assertInstanceOf(ThinkingStart::class, $chunks[0]);
-        $this->assertSame(ThinkingContentType::OPAQUE, $chunks[0]->getContentType());
-        $this->assertInstanceOf(ThinkingSignature::class, $chunks[1]);
-        $this->assertSame($reasoningItem, json_decode($chunks[1]->getSignature(), true));
+        $this->assertSame(ThinkingRepresentation::OPAQUE, $chunks[0]->getRepresentation());
+        $this->assertInstanceOf(ThinkingStateDelta::class, $chunks[1]);
+        $this->assertSame(ThinkingProviderState::FORMAT_OPEN_RESPONSES_REASONING, $chunks[1]->getFormat());
+        $this->assertSame($reasoningItem, json_decode($chunks[1]->getPayload(), true));
         $this->assertInstanceOf(ThinkingComplete::class, $chunks[2]);
         $this->assertSame('', $chunks[2]->getThinking());
-        $this->assertSame(ThinkingContentType::OPAQUE, $chunks[2]->getContentType());
+        $this->assertSame(ThinkingRepresentation::OPAQUE, $chunks[2]->getRepresentation());
     }
 
     public function testThrowsServerExceptionOnServerErrorStatusBeforeStreaming()

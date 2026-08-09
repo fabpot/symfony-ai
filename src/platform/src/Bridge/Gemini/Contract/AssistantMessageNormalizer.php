@@ -21,6 +21,8 @@ use Symfony\AI\Platform\Message\Content\Text;
 use Symfony\AI\Platform\Message\Content\Thinking;
 use Symfony\AI\Platform\Model;
 use Symfony\AI\Platform\Result\ToolCall;
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 
 /**
  * @author Christopher Hertel <mail@christopher-hertel.de>
@@ -49,11 +51,21 @@ final class AssistantMessageNormalizer extends ModelContractNormalizer
             }
 
             if ($part instanceof Thinking) {
-                $thoughtPart = ['text' => $part->getContent(), 'thought' => true];
-                if (null !== $part->getSignature()) {
-                    $thoughtPart['thoughtSignature'] = $part->getSignature();
+                $state = $part->getProviderState();
+                if (null === $state || ThinkingProviderState::FORMAT_GEMINI_THOUGHT_SIGNATURE !== $state->getFormat()) {
+                    continue;
                 }
-                $normalized[] = $thoughtPart;
+
+                if (ThinkingRepresentation::OPAQUE === $part->getRepresentation() && '' === $part->getContent()) {
+                    $normalized[] = ['thoughtSignature' => $state->getPayload()];
+                    continue;
+                }
+
+                $normalized[] = [
+                    'text' => $part->getContent(),
+                    'thought' => true,
+                    'thoughtSignature' => $state->getPayload(),
+                ];
                 continue;
             }
 

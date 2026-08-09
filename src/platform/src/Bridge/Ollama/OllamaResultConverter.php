@@ -15,18 +15,23 @@ use Symfony\AI\Platform\Exception\IncompleteStreamException;
 use Symfony\AI\Platform\Exception\RuntimeException;
 use Symfony\AI\Platform\FinishReason\FinishReasonAwareTrait;
 use Symfony\AI\Platform\Model;
+use Symfony\AI\Platform\Result\MultiPartResult;
 use Symfony\AI\Platform\Result\RawResultInterface;
 use Symfony\AI\Platform\Result\ResultInterface;
 use Symfony\AI\Platform\Result\Stream\Delta\MetadataDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\TextDelta;
+use Symfony\AI\Platform\Result\Stream\Delta\ThinkingComplete;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingDelta;
+use Symfony\AI\Platform\Result\Stream\Delta\ThinkingStart;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallComplete;
 use Symfony\AI\Platform\Result\StreamResult;
 use Symfony\AI\Platform\Result\TextResult;
+use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCall;
 use Symfony\AI\Platform\Result\ToolCallResult;
 use Symfony\AI\Platform\Result\VectorResult;
 use Symfony\AI\Platform\ResultConverterInterface;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 use Symfony\AI\Platform\TokenUsage\TokenUsage;
 use Symfony\AI\Platform\TokenUsage\TokenUsageExtractorInterface;
 use Symfony\AI\Platform\Vector\Vector;
@@ -74,17 +79,30 @@ final class OllamaResultConverter implements ResultConverterInterface
             throw new RuntimeException('Message does not contain content.');
         }
 
-        $toolCalls = [];
+        $results = [];
+        if (\is_string($data['message']['thinking'] ?? null) && '' !== $data['message']['thinking']) {
+            $results[] = new ThinkingResult($data['message']['thinking'], ThinkingRepresentation::FULL);
+        }
 
+        if ('' !== $data['message']['content']) {
+            $results[] = new TextResult($data['message']['content']);
+        }
+
+        $toolCalls = [];
         foreach ($data['message']['tool_calls'] ?? [] as $id => $toolCall) {
             $toolCalls[] = new ToolCall($id, $toolCall['function']['name'], $toolCall['function']['arguments']);
         }
-
         if ([] !== $toolCalls) {
-            return $this->withFinishReason(new ToolCallResult($toolCalls), FinishReasonMapper::map($data['done_reason'] ?? null));
+            $results[] = new ToolCallResult($toolCalls);
         }
 
-        return $this->withFinishReason(new TextResult($data['message']['content']), FinishReasonMapper::map($data['done_reason'] ?? null));
+        if ([] === $results) {
+            $results[] = new TextResult('');
+        }
+
+        $converted = 1 === \count($results) ? $results[0] : new MultiPartResult($results);
+
+        return $this->withFinishReason($converted, FinishReasonMapper::map($data['done_reason'] ?? null));
     }
 
     /**
@@ -110,6 +128,9 @@ final class OllamaResultConverter implements ResultConverterInterface
         $sawChunk = false;
         $sawDone = false;
         $finishReason = null;
+        $thinking = '';
+        $thinkingId = null;
+        $thinkingBlock = 0;
         foreach ($result->getDataStream() as $data) {
             // Ollama emits {"error": "..."} on HTTP 200 in practice; not part of the
             // documented schema, so this guard is defensive.
@@ -132,10 +153,20 @@ final class OllamaResultConverter implements ResultConverterInterface
             }
 
             if ($this->hasThinkingDelta($data)) {
-                yield new ThinkingDelta($data['message']['thinking']);
+                if (null === $thinkingId) {
+                    $thinkingId = 'ollama-thinking-'.$thinkingBlock++;
+                    yield new ThinkingStart($thinkingId, ThinkingRepresentation::FULL);
+                }
+                $thinking .= $data['message']['thinking'];
+                yield new ThinkingDelta($thinkingId, $data['message']['thinking'], ThinkingRepresentation::FULL);
             }
 
             if ($this->hasTextDelta($data)) {
+                if (null !== $thinkingId) {
+                    yield new ThinkingComplete($thinkingId, $thinking, ThinkingRepresentation::FULL);
+                    $thinking = '';
+                    $thinkingId = null;
+                }
                 yield new TextDelta($data['message']['content']);
             }
 
@@ -149,6 +180,10 @@ final class OllamaResultConverter implements ResultConverterInterface
                     completionTokens: $data['eval_count'],
                 );
             }
+        }
+
+        if (null !== $thinkingId) {
+            yield new ThinkingComplete($thinkingId, $thinking, ThinkingRepresentation::FULL);
         }
 
         if ($sawChunk && !$sawDone) {

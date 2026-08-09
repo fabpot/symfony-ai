@@ -13,22 +13,27 @@ namespace Symfony\AI\Platform\Tests\Result;
 
 use PHPUnit\Framework\TestCase;
 use Symfony\AI\Platform\Result\ThinkingResult;
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 
 final class ThinkingResultTest extends TestCase
 {
-    public function testGetContentAndSignature()
+    public function testCarriesThinkingRepresentationAndProviderState()
     {
-        $result = new ThinkingResult('Thinking step by step…', 'sig_abc');
+        $providerState = new ThinkingProviderState(ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE, 'sig_abc');
+        $result = new ThinkingResult('Thinking step by step…', ThinkingRepresentation::SUMMARY, $providerState);
 
         $this->assertSame('Thinking step by step…', $result->getContent());
-        $this->assertSame('sig_abc', $result->getSignature());
+        $this->assertSame(ThinkingRepresentation::SUMMARY, $result->getRepresentation());
+        $this->assertSame($providerState, $result->getProviderState());
     }
 
-    public function testDefaultsToNullContentAndSignature()
+    public function testDefaultsToUnknownRepresentationWithoutProviderState()
     {
         $result = new ThinkingResult();
 
         $this->assertNull($result->getContent());
-        $this->assertNull($result->getSignature());
+        $this->assertSame(ThinkingRepresentation::UNKNOWN, $result->getRepresentation());
+        $this->assertNull($result->getProviderState());
     }
 }

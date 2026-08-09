@@ -11,7 +11,9 @@
 
 namespace Symfony\AI\Platform\Result\Stream\Delta;
 
-use Symfony\AI\Platform\Result\ThinkingContentType;
+use Symfony\AI\Platform\Exception\InvalidArgumentException;
+use Symfony\AI\Platform\Thinking\ThinkingProviderState;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 
 /**
  * Signals that a thinking block is complete with accumulated content.
@@ -20,11 +22,26 @@ use Symfony\AI\Platform\Result\ThinkingContentType;
  */
 final class ThinkingComplete implements DeltaInterface
 {
+    /**
+     * @param non-empty-string $id
+     */
     public function __construct(
+        private readonly string $id,
         private readonly string $thinking,
-        private readonly ?string $signature = null,
-        private readonly ThinkingContentType $contentType = ThinkingContentType::FULL,
+        private readonly ThinkingRepresentation $representation,
+        private readonly ?ThinkingProviderState $providerState = null,
     ) {
+        if ('' === $id) {
+            throw new InvalidArgumentException('Thinking stream ID cannot be empty.');
+        }
+    }
+
+    /**
+     * @return non-empty-string
+     */
+    public function getId(): string
+    {
+        return $this->id;
     }
 
     public function getThinking(): string
@@ -32,13 +49,13 @@ final class ThinkingComplete implements DeltaInterface
         return $this->thinking;
     }
 
-    public function getSignature(): ?string
+    public function getRepresentation(): ThinkingRepresentation
     {
-        return $this->signature;
+        return $this->representation;
     }
 
-    public function getContentType(): ThinkingContentType
+    public function getProviderState(): ?ThinkingProviderState
     {
-        return $this->contentType;
+        return $this->providerState;
     }
 }

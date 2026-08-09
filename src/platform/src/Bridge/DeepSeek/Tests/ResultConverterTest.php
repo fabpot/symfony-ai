@@ -21,6 +21,7 @@ use Symfony\AI\Platform\Exception\ServerException;
 use Symfony\AI\Platform\FinishReason\FinishReasonCase;
 use Symfony\AI\Platform\Model;
 use Symfony\AI\Platform\Result\InMemoryRawResult;
+use Symfony\AI\Platform\Result\MultiPartResult;
 use Symfony\AI\Platform\Result\RawHttpResult;
 use Symfony\AI\Platform\Result\Stream\Delta\MetadataDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\TextDelta;
@@ -28,7 +29,9 @@ use Symfony\AI\Platform\Result\Stream\Delta\ThinkingComplete;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingDelta;
 use Symfony\AI\Platform\Result\StreamResult;
 use Symfony\AI\Platform\Result\TextResult;
+use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCallResult;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\JsonMockResponse;
 
@@ -75,6 +78,35 @@ final class ResultConverterTest extends TestCase
 
         $this->assertInstanceOf(TextResult::class, $result);
         $this->assertSame('Hello, how can I help you?', $result->getContent());
+    }
+
+    public function testConvertPreservesReasoningWithToolCalls()
+    {
+        $httpClient = new MockHttpClient(new JsonMockResponse(['choices' => [[
+            'index' => 0,
+            'message' => [
+                'role' => 'assistant',
+                'reasoning_content' => 'I need current data.',
+                'content' => null,
+                'tool_calls' => [[
+                    'id' => 'call_reasoning',
+                    'type' => 'function',
+                    'function' => ['name' => 'lookup', 'arguments' => '{}'],
+                ]],
+            ],
+            'finish_reason' => 'tool_calls',
+        ]]]));
+
+        $result = (new ResultConverter())->convert(new RawHttpResult($httpClient->request('POST', 'https://api.deepseek.com/chat/completions')));
+
+        $this->assertInstanceOf(MultiPartResult::class, $result);
+        $parts = $result->getContent();
+        $this->assertCount(2, $parts);
+        $this->assertInstanceOf(ThinkingResult::class, $parts[0]);
+        $this->assertSame('I need current data.', $parts[0]->getContent());
+        $this->assertSame(ThinkingRepresentation::FULL, $parts[0]->getRepresentation());
+        $this->assertInstanceOf(ToolCallResult::class, $parts[1]);
+        $this->assertSame('call_reasoning', $parts[1]->getContent()[0]->getId());
     }
 
     public function testConvertToolCallResponse()
@@ -201,7 +233,7 @@ final class ResultConverterTest extends TestCase
         $thinkingCompletes = array_values(array_filter($chunks, static fn ($c) => $c instanceof ThinkingComplete));
         $this->assertCount(1, $thinkingCompletes);
         $this->assertSame('Let me think about this.', $thinkingCompletes[0]->getThinking());
-        $this->assertNull($thinkingCompletes[0]->getSignature());
+        $this->assertNull($thinkingCompletes[0]->getProviderState());
 
         $textDeltas = array_values(array_filter($chunks, static fn ($c) => $c instanceof TextDelta));
         $this->assertCount(2, $textDeltas);

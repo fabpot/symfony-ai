@@ -17,17 +17,22 @@ use Symfony\AI\Platform\Exception\RateLimitExceededException;
 use Symfony\AI\Platform\Exception\RuntimeException;
 use Symfony\AI\Platform\Exception\ServerException;
 use Symfony\AI\Platform\FinishReason\FinishReasonAwareTrait;
+use Symfony\AI\Platform\Result\MultiPartResult;
 use Symfony\AI\Platform\Result\RawResultInterface;
+use Symfony\AI\Platform\Result\ResultInterface;
 use Symfony\AI\Platform\Result\Stream\Delta\MetadataDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\TextDelta;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingComplete;
 use Symfony\AI\Platform\Result\Stream\Delta\ThinkingDelta;
+use Symfony\AI\Platform\Result\Stream\Delta\ThinkingStart;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallComplete;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolCallStart;
 use Symfony\AI\Platform\Result\Stream\Delta\ToolInputDelta;
 use Symfony\AI\Platform\Result\TextResult;
+use Symfony\AI\Platform\Result\ThinkingResult;
 use Symfony\AI\Platform\Result\ToolCall;
 use Symfony\AI\Platform\Result\ToolCallResult;
+use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 use Symfony\AI\Platform\TokenUsage\TokenUsage;
 
 /**
@@ -46,6 +51,8 @@ trait CompletionsConversionTrait
     {
         $toolCalls = [];
         $reasoning = '';
+        $reasoningId = null;
+        $reasoningBlock = 0;
         $sawChunk = false;
         $finishReason = null;
 
@@ -93,13 +100,18 @@ trait CompletionsConversionTrait
             $reasoningContent = $data['choices'][0]['delta']['reasoning_content']
                 ?? $data['choices'][0]['delta']['reasoning'] ?? null;
             if (null !== $reasoningContent && '' !== $reasoningContent) {
+                if (null === $reasoningId) {
+                    $reasoningId = 'generic-completions-thinking-'.$reasoningBlock++;
+                    yield new ThinkingStart($reasoningId, ThinkingRepresentation::FULL);
+                }
                 $reasoning .= $reasoningContent;
-                yield new ThinkingDelta($reasoningContent);
+                yield new ThinkingDelta($reasoningId, $reasoningContent, ThinkingRepresentation::FULL);
             }
 
-            if ('' !== $reasoning && isset($data['choices'][0]['delta']['content']) && '' !== $data['choices'][0]['delta']['content']) {
-                yield new ThinkingComplete($reasoning);
+            if ('' !== $reasoning && null !== $reasoningId && isset($data['choices'][0]['delta']['content']) && '' !== $data['choices'][0]['delta']['content']) {
+                yield new ThinkingComplete($reasoningId, $reasoning, ThinkingRepresentation::FULL);
                 $reasoning = '';
+                $reasoningId = null;
             }
 
             if (!isset($data['choices'][0]['delta']['content'])) {
@@ -109,8 +121,8 @@ trait CompletionsConversionTrait
             yield new TextDelta($data['choices'][0]['delta']['content']);
         }
 
-        if ('' !== $reasoning) {
-            yield new ThinkingComplete($reasoning);
+        if ('' !== $reasoning && null !== $reasoningId) {
+            yield new ThinkingComplete($reasoningId, $reasoning, ThinkingRepresentation::FULL);
         }
 
         if ($sawChunk && null === $finishReason) {
@@ -228,17 +240,34 @@ trait CompletionsConversionTrait
      *     finish_reason: 'stop'|'length'|'tool_calls'|'content_filter',
      * } $choice
      */
-    protected function convertChoice(array $choice): ToolCallResult|TextResult
+    protected function convertChoice(array $choice): ResultInterface
     {
-        if ('tool_calls' === $choice['finish_reason']) {
-            return $this->withFinishReason(new ToolCallResult(array_map([$this, 'convertToolCall'], $choice['message']['tool_calls'])), FinishReasonMapper::map($choice['finish_reason']));
+        if (!\in_array($choice['finish_reason'], ['stop', 'length', 'tool_calls'], true)) {
+            throw new RuntimeException(\sprintf('Unsupported finish reason "%s".', $choice['finish_reason']));
         }
 
-        if (\in_array($choice['finish_reason'], ['stop', 'length'], true)) {
-            return $this->withFinishReason(new TextResult($choice['message']['content']), FinishReasonMapper::map($choice['finish_reason']));
+        $results = [];
+        $reasoning = $choice['message']['reasoning_content'] ?? $choice['message']['reasoning'] ?? null;
+        if (\is_string($reasoning) && '' !== $reasoning) {
+            $results[] = new ThinkingResult($reasoning, ThinkingRepresentation::FULL);
         }
 
-        throw new RuntimeException(\sprintf('Unsupported finish reason "%s".', $choice['finish_reason']));
+        $content = $choice['message']['content'] ?? null;
+        if (\is_string($content) && '' !== $content) {
+            $results[] = new TextResult($content);
+        }
+
+        if ([] !== ($choice['message']['tool_calls'] ?? [])) {
+            $results[] = new ToolCallResult(array_map([$this, 'convertToolCall'], $choice['message']['tool_calls']));
+        }
+
+        if ([] === $results) {
+            $results[] = new TextResult('');
+        }
+
+        $result = 1 === \count($results) ? $results[0] : new MultiPartResult($results);
+
+        return $this->withFinishReason($result, FinishReasonMapper::map($choice['finish_reason']));
     }
 
     /**

@@ -4,6 +4,8 @@ CHANGELOG
 0.11
 ----
 
+ * Preserve summary/opaque thinking representations and typed Gemini thought signatures with stable stream block IDs
+ * Preserve all streamed tool calls and text in provider order
  * Throw `ServerException` on server errors (HTTP 5xx) instead of a generic `RuntimeException`
  * Add a `baseUrl` argument to the model clients and the factory to target Gemini-compatible endpoints
  * Raise a `RuntimeException` on unhandled HTTP error statuses before streaming, instead of returning an empty stream

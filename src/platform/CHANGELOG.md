@@ -4,7 +4,9 @@ CHANGELOG
 0.13
 ----
 
- * Add `ThinkingContentType` for full, summarized, opaque, and redacted reasoning
+ * [BC BREAK] Replace `ThinkingContentType` and signature-specific thinking APIs with neutral `ThinkingRepresentation` and `ThinkingProviderState` objects; thinking stream deltas now carry correlation IDs and `ThinkingStateDelta` replaces `ThinkingSignature`
+ * Add `Capability::OUTPUT_THINKING_FULL` and `Capability::OUTPUT_THINKING_SUMMARY`
+ * Pass the resolved `Model` to result converters as `Contract::CONTEXT_MODEL` without exposing it in invocation options or events
  * [BC BREAK] Add `ListenerInterface::onError()` and `Result\Stream\ErrorEvent`, dispatched when draining a `StreamResult` throws, so a listener can finalize on a failed stream where `onComplete()` never fires; `AbstractStreamListener` provides a no-op default
 
 0.12

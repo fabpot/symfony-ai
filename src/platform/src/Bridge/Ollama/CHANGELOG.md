@@ -4,6 +4,7 @@ CHANGELOG
 0.10
 ----
 
+ * Preserve explicit full thinking content alongside buffered text/tool calls and expose stable thinking stream blocks
  * Throw `IncompleteStreamException` when a stream ends before a `done` message
 
 0.8

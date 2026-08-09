@@ -41,6 +41,36 @@ AI Bundle
 Platform
 --------
 
+ * The thinking API now separates readable representation from opaque provider state.
+   `Result\ThinkingContentType` and `Result\Stream\Delta\ThinkingSignature` have been removed.
+   Use `Thinking\ThinkingRepresentation`, `Thinking\ThinkingProviderState`, and
+   `Result\Stream\Delta\ThinkingStateDelta` instead:
+
+   ```diff
+   -new ThinkingResult($content, $signature, ThinkingContentType::SUMMARY);
+   +new ThinkingResult(
+   +    $content,
+   +    ThinkingRepresentation::SUMMARY,
+   +    new ThinkingProviderState(ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE, $signature),
+   +);
+   ```
+
+   Replace `getContentType()` with `getRepresentation()` and `getSignature()` with
+   `getProviderState()`. Redacted content is represented as `ThinkingRepresentation::OPAQUE`
+   with the `ThinkingProviderState::FORMAT_ANTHROPIC_REDACTED` state format. Constructors for
+   `Message\Content\Thinking` and `ThinkingResult` default to
+   `ThinkingRepresentation::UNKNOWN`; no representation is inferred for legacy persisted data.
+
+   Thinking stream deltas now require an explicit correlation ID and representation:
+
+   ```diff
+   -new ThinkingDelta($content, ThinkingContentType::SUMMARY);
+   +new ThinkingDelta($id, $content, ThinkingRepresentation::SUMMARY);
+   ```
+
+   `ThinkingStart`, `ThinkingDelta`, `ThinkingStateDelta`, and `ThinkingComplete` all expose
+   `getId()` and `getRepresentation()`.
+
  * `Result\Stream\ListenerInterface` gained an `onError()` method, dispatched with the new
    `Result\Stream\ErrorEvent`. Listeners not extending
    `AbstractStreamListener` must add the method:

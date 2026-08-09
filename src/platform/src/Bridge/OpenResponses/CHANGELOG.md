@@ -4,8 +4,8 @@ CHANGELOG
 0.13
 ----
 
+ * Preserve full, summary, and opaque reasoning items with typed replay state and output-item ordering in buffered and streamed responses
  * Throw `ServerException` when an OpenAI response reports that the server is overloaded
- * Preserve reasoning items as thinking signatures and replay them on subsequent requests
 
 0.12
 ----

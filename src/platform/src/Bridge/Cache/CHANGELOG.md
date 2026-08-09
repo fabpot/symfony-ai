@@ -1,6 +1,11 @@
 CHANGELOG
 =========
 
+0.13
+----
+
+ * [BC BREAK] Persist `ThinkingResult` representation and nested provider state; legacy signatures are retained as unknown-format state without inferring a representation
+
 0.11
 ----
 

@@ -1,6 +1,11 @@
 CHANGELOG
 =========
 
+0.10
+----
+
+ * [BC BREAK] Persist thinking parts with their representation and nested provider state; legacy signatures are retained as unknown-format state without inferring a representation
+
 0.9
 ---
 

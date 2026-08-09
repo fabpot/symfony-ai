@@ -4,6 +4,7 @@ CHANGELOG
 0.10
 ----
 
+ * Preserve explicit Claude thinking representations and typed Anthropic replay state
  * Allow overriding `tool_choice` via caller options instead of always forcing `['type' => 'auto']` for Anthropic Claude models
 
 0.9

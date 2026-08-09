@@ -4,6 +4,7 @@ CHANGELOG
 0.13
 ----
 
+ * Preserve explicit full/summary/opaque thinking representations and typed Anthropic replay state based on model capabilities
  * Preserve omitted and redacted thinking as opaque content that can be replayed across requests
 
 0.12

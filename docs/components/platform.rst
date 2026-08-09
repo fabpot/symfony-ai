@@ -55,6 +55,8 @@ start for vendor-specific models and their capabilities.
 
 Capabilities are a list of strings defined by :class:`Symfony\\AI\\Platform\\Capability`, which can be used to check if a model
 supports a specific feature, like ``Capability::INPUT_AUDIO``, ``Capability::OUTPUT_IMAGE``, or ``Capability::THINKING``.
+Models that expose readable reasoning can additionally declare ``Capability::OUTPUT_THINKING_FULL`` or
+``Capability::OUTPUT_THINKING_SUMMARY``.
 
 Options are additional parameters that can be passed to the model, like ``temperature`` or ``max_output_tokens``, and are
 usually defined by the specific models and their documentation.
@@ -600,11 +602,12 @@ The following delta types are available:
 
 * :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\TextDelta` -- a chunk of generated text
 * :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ThinkingStart`
-  -- signals the start of a full, summarized, or opaque thinking block
+  -- signals the start of a thinking block and assigns its correlation ID
 * :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ThinkingDelta` -- a chunk of full model reasoning or its summary
+* :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ThinkingStateDelta`
+  -- a chunk of opaque provider state associated with a thinking block
 * :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ThinkingComplete`
-  -- signals thinking is complete, including optional content and provider state
-* :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ThinkingSignature` -- a cryptographic signature for a thinking block
+  -- signals thinking is complete, including optional provider state
 * :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ToolCallStart` -- signals the start of a tool call
 * :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ToolInputDelta` -- a chunk of tool call input data
 * :class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ToolCallComplete` -- signals all tool calls are complete and ready for execution
@@ -774,11 +777,11 @@ deltas::
     use Symfony\AI\Platform\Result\Stream\Delta\TextDelta;
     use Symfony\AI\Platform\Result\Stream\Delta\ThinkingComplete;
     use Symfony\AI\Platform\Result\Stream\Delta\ThinkingDelta;
-    use Symfony\AI\Platform\Result\ThinkingContentType;
+    use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 
     foreach ($result->asStream() as $delta) {
         if ($delta instanceof ThinkingDelta) {
-            $label = ThinkingContentType::SUMMARY === $delta->getContentType()
+            $label = ThinkingRepresentation::SUMMARY === $delta->getRepresentation()
                 ? 'thinking summary'
                 : 'thinking';
             echo '[' . $label . '] ' . $delta->getThinking();
@@ -787,18 +790,15 @@ deltas::
         }
 
         if ($delta instanceof ThinkingComplete) {
-            if (\in_array($delta->getContentType(), [
-                ThinkingContentType::FULL,
-                ThinkingContentType::SUMMARY,
+            if (\in_array($delta->getRepresentation(), [
+                ThinkingRepresentation::FULL,
+                ThinkingRepresentation::SUMMARY,
             ], true)) {
                 echo '[thinking done] ' . $delta->getThinking() . "\n";
             }
 
-            // Anthropic includes a cryptographic signature for verification
-            if (null !== $delta->getSignature()) {
-                // Store signature if you need to echo the thinking block
-                // back in subsequent requests
-            }
+            // Keep opaque provider state when replaying this block later
+            $providerState = $delta->getProviderState();
 
             continue;
         }
@@ -808,45 +808,59 @@ deltas::
         }
     }
 
-The ``getContentType()`` method distinguishes four forms of thinking:
+All thinking stream deltas expose ``getId()``. The result converter assigns this
+ID so that interleaved content and state deltas can be correlated with the
+matching start and completion events. Their ``getRepresentation()`` method returns one
+of four values:
 
-* ``ThinkingContentType::FULL`` contains the model's exposed reasoning
-* ``ThinkingContentType::SUMMARY`` contains a readable summary of hidden
+* ``ThinkingRepresentation::FULL`` contains the model's exposed reasoning
+* ``ThinkingRepresentation::SUMMARY`` contains a readable summary of hidden
   reasoning
-* ``ThinkingContentType::OPAQUE`` contains no readable reasoning, but can carry
-  provider state that must be preserved for subsequent requests
-* ``ThinkingContentType::REDACTED`` contains reasoning hidden by a provider's
-  safety controls
+* ``ThinkingRepresentation::OPAQUE`` contains no readable reasoning, but can
+  carry provider state that must be preserved for subsequent requests
+* ``ThinkingRepresentation::UNKNOWN`` means the provider cannot classify the
+  representation reliably
 
 .. versionadded:: 0.13
 
-    The ``ThinkingContentType`` enum and ``getContentType()`` method were
-    introduced in Symfony AI 0.13.
+    The thinking representation and provider-state APIs were introduced in
+    Symfony AI 0.13.
 
-The ``ThinkingComplete`` delta also has these methods:
-
-* ``getThinking()`` (string): the model's accumulated reasoning text or summary,
-  or an empty string for opaque and redacted thinking
-* ``getSignature()`` (?string): provider state required when echoing thinking
-  blocks back in multi-turn conversations
+The ``ThinkingComplete`` delta exposes the accumulated reasoning through
+``getThinking()`` and optional opaque state through ``getProviderState()``.
+The latter returns a
+:class:`Symfony\\AI\\Platform\\Thinking\\ThinkingProviderState`, whose format
+identifies the provider protocol while its payload must be preserved verbatim.
+During streaming, providers can emit state incrementally with
+:class:`Symfony\\AI\\Platform\\Result\\Stream\\Delta\\ThinkingStateDelta`.
 
 Multi-Turn Conversations with Thinking
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-When using thinking in multi-turn conversations, Anthropic requires that
+When using thinking in multi-turn conversations, some providers require that
 thinking blocks from previous assistant turns be included in the conversation
 history. The :class:`Symfony\\AI\\Platform\\Message\\AssistantMessage` accepts a
 variadic list of :class:`Symfony\\AI\\Platform\\Message\\Content\\ContentInterface`
 parts, including :class:`Symfony\\AI\\Platform\\Message\\Content\\Thinking` blocks
-that carry the original reasoning text and its provider-specific signature::
+that carry the original reasoning, its representation, and opaque provider
+state::
 
     use Symfony\AI\Platform\Message\AssistantMessage;
     use Symfony\AI\Platform\Message\Content\Text;
     use Symfony\AI\Platform\Message\Content\Thinking;
+    use Symfony\AI\Platform\Thinking\ThinkingProviderState;
+    use Symfony\AI\Platform\Thinking\ThinkingRepresentation;
 
     // Include the model's thinking from a previous turn
     $assistant = new AssistantMessage(
-        new Thinking('Let me work through this step by step...', 'sig_abc123...'),
+        new Thinking(
+            'Let me work through this step by step...',
+            ThinkingRepresentation::SUMMARY,
+            new ThinkingProviderState(
+                ThinkingProviderState::FORMAT_ANTHROPIC_SIGNATURE,
+                'sig_abc123...',
+            ),
+        ),
         new Text('The answer is 42.'),
     );
 
@@ -859,7 +873,7 @@ that carry the original reasoning text and its provider-specific signature::
 In practice you usually do not have to build the parts yourself.
 :method:`Symfony\\AI\\Platform\\Message\\Message::ofAssistant` accepts strings,
 content parts, and result objects, and unwraps them into the matching content
-parts (including thinking blocks with their signatures). Passing the result of a
+parts (including thinking blocks with their provider state). Passing the result of a
 previous invocation back into the message bag is therefore a one-liner::
 
     use Symfony\AI\Platform\Message\Message;

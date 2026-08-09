@@ -4,6 +4,7 @@ CHANGELOG
 0.12
 ----
 
+ * Preserve explicit full reasoning content alongside buffered text/tool calls and expose stable thinking stream blocks
  * Throw a clear exception for malformed tool call arguments
 
 0.11

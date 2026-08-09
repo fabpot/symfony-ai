@@ -4,6 +4,8 @@ CHANGELOG
 0.11
 ----
 
+ * Preserve summary/opaque thinking representations and typed Gemini thought signatures with stable stream block IDs
+ * Preserve all streamed tool calls and text in provider order
  * Derive the API host from the configured `location` to support regional and data-residency endpoints
  * Throw `ServerException` on server errors (HTTP 5xx) instead of a generic `RuntimeException`
  * Raise a `RuntimeException` on unhandled HTTP error statuses before streaming, instead of returning an empty stream

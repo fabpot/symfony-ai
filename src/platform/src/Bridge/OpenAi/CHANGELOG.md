@@ -4,6 +4,7 @@ CHANGELOG
 0.11
 ----
 
+ * Preserve typed full, summary, and opaque Responses API reasoning and output-item ordering
  * Throw `ServerException` on server errors (HTTP 5xx) instead of a generic `RuntimeException`
  * Throw typed exceptions on rate limit and server error events mid-stream
  * Raise a `RuntimeException` on unhandled HTTP error statuses before streaming, instead of returning an empty stream
